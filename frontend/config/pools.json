@@ -1,0 +1,76 @@
+{
+  "pools": [
+    {
+      "id": "sui-usdc",
+      "name": "SUI / USDC",
+      "baseAsset": {
+        "symbol": "SUI",
+        "name": "Sui",
+        "decimals": 9,
+        "icon": "/assets/sui.svg",
+        "testnetAddress": "0x2::sui::SUI"
+      },
+      "quoteAsset": {
+        "symbol": "USDC",
+        "name": "USD Coin",
+        "decimals": 6,
+        "icon": "/assets/usdc.svg",
+        "testnetAddress": "0x2::usdc::USDC"
+      },
+      "testnetPoolId": "0x0",
+      "maxLeverage": 5,
+      "minOrderSize": 1,
+      "tickSize": 0.0001
+    },
+    {
+      "id": "eth-usdc",
+      "name": "ETH / USDC",
+      "baseAsset": {
+        "symbol": "ETH",
+        "name": "Ethereum",
+        "decimals": 8,
+        "icon": "/assets/eth.svg",
+        "testnetAddress": "0x0"
+      },
+      "quoteAsset": {
+        "symbol": "USDC",
+        "name": "USD Coin",
+        "decimals": 6,
+        "icon": "/assets/usdc.svg",
+        "testnetAddress": "0x2::usdc::USDC"
+      },
+      "testnetPoolId": "0x0",
+      "maxLeverage": 5,
+      "minOrderSize": 0.001,
+      "tickSize": 0.01
+    },
+    {
+      "id": "btc-usdc",
+      "name": "BTC / USDC",
+      "baseAsset": {
+        "symbol": "BTC",
+        "name": "Bitcoin",
+        "decimals": 8,
+        "icon": "/assets/btc.svg",
+        "testnetAddress": "0x0"
+      },
+      "quoteAsset": {
+        "symbol": "USDC",
+        "name": "USD Coin",
+        "decimals": 6,
+        "icon": "/assets/usdc.svg",
+        "testnetAddress": "0x2::usdc::USDC"
+      },
+      "testnetPoolId": "0x0",
+      "maxLeverage": 5,
+      "minOrderSize": 0.0001,
+      "tickSize": 0.1
+    }
+  ],
+  "network": {
+    "testnet": {
+      "rpcUrl": "https://fullnode.testnet.sui.io:443",
+      "deepbookPackageId": "0x0"
+    }
+  }
+}
