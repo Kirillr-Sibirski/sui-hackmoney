@@ -16,6 +16,8 @@ import { FloatingIcons } from "@/components/ui/floating-icons";
 import { SpotlightCard } from "@/components/ui/spotlight-card";
 import { PulseDot } from "@/components/ui/pulse-dot";
 import { PoolPairIcon, CoinIcon } from "@/components/ui/coin-icon";
+import { calculateModifiedRiskRatio, getRiskColor, getRiskLabel } from "@/lib/risk";
+import { usePrices } from "@/hooks/use-prices";
 import Link from "next/link";
 
 const mockPositions = [
@@ -47,34 +49,21 @@ const mockPositions = [
   },
 ];
 
-function getRiskStatus(risk: number) {
-  if (risk <= 1.0) return { label: "Safe", color: "text-emerald-500" };
-  if (risk <= 2.0) return { label: "Moderate", color: "text-yellow-500" };
-  return { label: "High", color: "text-rose-500" };
-}
-
-function ModifyPopover({ position }: { position: (typeof mockPositions)[number] }) {
+function ModifyPopover({ position, collateralPrice }: { position: (typeof mockPositions)[number]; collateralPrice: number }) {
   const [action, setAction] = useState("deposit");
   const [amount, setAmount] = useState("");
 
   const amountNum = parseFloat(amount) || 0;
-  const newCollateral =
-    action === "deposit"
-      ? position.collateral + amountNum
-      : Math.max(0, position.collateral - amountNum);
+  const delta = action === "deposit" ? amountNum : -amountNum;
 
-  // Mock: risk ratio scales inversely with collateral
-  const baseRisk = position.risk;
-  const newRisk =
-    newCollateral > 0
-      ? baseRisk * (position.collateral / newCollateral)
-      : 0;
-
-  const getRiskColor = (risk: number) => {
-    if (risk <= 1.0) return "text-emerald-500";
-    if (risk <= 2.0) return "text-yellow-500";
-    return "text-rose-500";
-  };
+  const newRisk = amountNum > 0
+    ? calculateModifiedRiskRatio(
+        position.collateral,
+        delta,
+        collateralPrice,
+        position.risk
+      )
+    : position.risk;
 
   return (
     <Popover>
@@ -101,6 +90,13 @@ function ModifyPopover({ position }: { position: (typeof mockPositions)[number] 
             <span className="font-mono font-medium flex items-center gap-1.5">
               <CoinIcon symbol={position.collateralAsset} size={14} />
               {position.collateral.toLocaleString()} {position.collateralAsset}
+            </span>
+          </div>
+
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Current Risk Ratio</span>
+            <span className={`font-mono font-medium ${getRiskColor(position.risk)}`}>
+              {position.risk.toFixed(2)}
             </span>
           </div>
 
@@ -161,7 +157,8 @@ function ModifyPopover({ position }: { position: (typeof mockPositions)[number] 
 }
 
 export default function DashboardPage() {
-  const totalCollateral = mockPositions.reduce((acc, p) => acc + p.collateral, 0);
+  const { getUsdPrice } = usePrices();
+  const totalCollateral = mockPositions.reduce((acc, p) => acc + p.collateral * getUsdPrice(p.collateralAsset), 0);
 
   return (
     <div className="min-h-screen bg-background relative">
@@ -198,9 +195,7 @@ export default function DashboardPage() {
             </div>
           ) : (
             <div className="space-y-4">
-              {mockPositions.map((position) => {
-                const riskStatus = getRiskStatus(position.risk);
-                return (
+              {mockPositions.map((position) => (
                   <div
                     key={position.id}
                     className="border rounded-lg p-4 hover:border-primary/30 transition-colors"
@@ -223,7 +218,7 @@ export default function DashboardPage() {
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <ModifyPopover position={position} />
+                        <ModifyPopover position={position} collateralPrice={getUsdPrice(position.collateralAsset)} />
                         <Button
                           variant="outline"
                           size="sm"
@@ -255,17 +250,14 @@ export default function DashboardPage() {
                         </p>
                       </div>
                       <div>
-                        <p className="text-muted-foreground">Risk</p>
-                        <p
-                          className={`font-mono font-medium ${riskStatus.color}`}
-                        >
-                          {position.risk.toFixed(1)} ({riskStatus.label})
+                        <p className="text-muted-foreground">Risk Ratio</p>
+                        <p className={`font-mono font-medium ${getRiskColor(position.risk)}`}>
+                          {position.risk.toFixed(2)} ({getRiskLabel(position.risk)})
                         </p>
                       </div>
                     </div>
                   </div>
-                );
-              })}
+                ))}
             </div>
           )}
         </SpotlightCard>

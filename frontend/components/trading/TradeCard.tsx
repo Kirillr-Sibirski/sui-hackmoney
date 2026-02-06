@@ -25,16 +25,15 @@ import pools from "@/config/pools.json";
 import marginPoolsConfig from "@/config/margin_pools.json";
 import coins from "@/config/coins.json";
 import { CoinIcon, PoolPairIcon } from "@/components/ui/coin-icon";
+import {
+  getMaxLeverage,
+  calculateRiskRatio,
+  getRiskColor,
+} from "@/lib/risk";
+import { usePrices } from "@/hooks/use-prices";
 
 const coinSymbols = Object.keys(coins.coins) as Array<keyof typeof coins.coins>;
 const marginPoolKeys = Object.keys(marginPoolsConfig.marginPools);
-
-// Mock prices
-const mockPrices: Record<string, number> = {
-  SUI: 3.45,
-  DEEP: 0.042,
-  DBUSDC: 1,
-};
 
 // Mock interest rate (annualized, per pool)
 const mockInterestRates: Record<string, number> = {
@@ -58,11 +57,15 @@ export function TradeCard() {
   const [marginManagers, setMarginManagers] = useState<Record<string, boolean>>({});
   const [creatingManagers, setCreatingManagers] = useState(false);
 
+  const { getUsdPrice, getPairPrice } = usePrices();
+
   const pool = pools.pools.find((p) => p.id === selectedPool) || pools.pools[0];
   const baseAsset = pool.baseAsset;
   const quoteAsset = pool.quoteAsset;
-  const currentPrice = mockPrices[baseAsset] || 1;
+  const basePrice = getUsdPrice(baseAsset);
+  const pairPrice = getPairPrice(baseAsset, quoteAsset);
   const interestRate = mockInterestRates[selectedPool] ?? 0.1;
+  const maxLeverage = getMaxLeverage(selectedPool);
 
   const requiredMarginPools = useMemo(
     () => getRequiredMarginPools(baseAsset, quoteAsset),
@@ -75,11 +78,6 @@ export function TradeCard() {
     if (!allManagersReady) {
       setCreatingManagers(true);
       try {
-        // TODO: Replace with actual DeepBook SDK calls:
-        // For each missing margin pool, call:
-        //   const tx = new Transaction();
-        //   dbClient.marginManager.newMarginManager(poolKey)(tx);
-        //   await signAndExecuteTransaction({ transaction: tx });
         await new Promise((resolve) => setTimeout(resolve, 1500));
         setMarginManagers((prev) => {
           const next = { ...prev };
@@ -96,7 +94,6 @@ export function TradeCard() {
       return;
     }
 
-    // TODO: Open the actual position
     console.log("Opening position:", { pool: selectedPool, side, amount, leverage, collateral, collateralAmount });
   }, [allManagersReady, missingManagers, selectedPool, side, amount, leverage, collateral, collateralAmount]);
 
@@ -119,33 +116,35 @@ export function TradeCard() {
     return opts;
   }, [baseAsset, quoteAsset]);
 
+  const isDeepSelected = collateral === "DEEP";
+
   // Only show stats when all inputs are filled
   const isComplete = amountNum > 0 && collateralNum > 0;
 
   const calculations = useMemo(() => {
     if (!isComplete) return null;
 
-    const positionSize = amountNum * leverageNum;
-    const liquidationDistance = 1 / leverageNum;
+    const collateralPrice = getUsdPrice(collateral);
+    const collateralUsd = collateralNum * collateralPrice;
+    const positionUsd = amountNum * leverageNum * basePrice;
+    const debtUsd = positionUsd - collateralUsd;
+    const riskRatio = calculateRiskRatio(positionUsd, debtUsd);
+
+    // Liquidation occurs when risk ratio drops to ~1.1
+    // risk = total_assets / total_debts
+    // At liquidation: assets*f / debts = 1.1 => f = 1.1 * debts / assets
+    const liqFactor = debtUsd > 0 ? (1.1 * debtUsd) / positionUsd : 0;
     const liqPrice =
       side === "long"
-        ? currentPrice * (1 - liquidationDistance + 0.01)
-        : currentPrice * (1 + liquidationDistance - 0.01);
+        ? basePrice * liqFactor
+        : basePrice * (2 - liqFactor);
 
-    const exposure = positionSize / currentPrice;
-    const riskScore = Math.max(1, Math.min(2, 2.5 - leverageNum * 0.3));
+    const exposure = amountNum * leverageNum;
+    const pnlUp = exposure * basePrice * 0.1;
+    const pnlDown = exposure * basePrice * 0.1;
 
-    const pnlUp = exposure * currentPrice * 0.1;
-    const pnlDown = exposure * currentPrice * 0.1;
-
-    return { positionSize, liqPrice, exposure, riskScore, pnlUp, pnlDown };
-  }, [isComplete, amountNum, leverageNum, side, currentPrice]);
-
-  const getRiskColor = (score: number) => {
-    if (score >= 1.8) return "text-emerald-500";
-    if (score >= 1.4) return "text-yellow-500";
-    return "text-rose-500";
-  };
+    return { positionUsd, liqPrice, exposure, riskRatio, pnlUp, pnlDown };
+  }, [isComplete, amountNum, collateralNum, collateral, leverageNum, side, basePrice, getUsdPrice]);
 
   return (
     <SpotlightCard className="w-full max-w-lg">
@@ -161,15 +160,22 @@ export function TradeCard() {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <Label>Margin Pool</Label>
-            <a
-              href="https://dexscreener.com/sui"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <ExternalLink className="w-3 h-3" />
-              Chart
-            </a>
+            <div className="flex items-center gap-3">
+              {pairPrice > 0 && (
+                <span className="text-xs font-mono text-muted-foreground">
+                  1 {baseAsset} = {pairPrice < 0.1 ? pairPrice.toFixed(4) : pairPrice.toFixed(2)} {quoteAsset}
+                </span>
+              )}
+              <a
+                href="https://dexscreener.com/sui"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Chart
+              </a>
+            </div>
           </div>
           <Select value={selectedPool} onValueChange={setSelectedPool}>
             <SelectTrigger>
@@ -215,7 +221,7 @@ export function TradeCard() {
 
         {/* Amount */}
         <div className="space-y-2">
-          <Label>Amount ({quoteAsset})</Label>
+          <Label>Amount ({baseAsset})</Label>
           <Input
             type="number"
             placeholder="0.00"
@@ -236,19 +242,27 @@ export function TradeCard() {
             value={leverage}
             onValueChange={setLeverage}
             min={1}
-            max={pool.maxLeverage}
+            max={maxLeverage}
             step={0.1}
             className="py-2"
           />
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>1x</span>
-            <span>{pool.maxLeverage}x</span>
+            <span>{maxLeverage}x</span>
           </div>
         </div>
 
         {/* Collateral — combined input + asset selector */}
         <div className="space-y-2">
-          <Label>Collateral</Label>
+          <div className="flex items-center justify-between">
+            <Label>Collateral</Label>
+            {isDeepSelected && (
+              <span className="flex items-center gap-1 text-xs text-primary">
+                <Sparkles className="w-3 h-3" />
+                Cheaper fees
+              </span>
+            )}
+          </div>
           <div className="flex items-center rounded-md border border-input bg-transparent shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 transition-[color,box-shadow]">
             <input
               type="number"
@@ -266,12 +280,12 @@ export function TradeCard() {
                   <SelectItem key={option.symbol} value={option.symbol} className="group">
                     <CoinIcon symbol={option.symbol} size={16} />
                     {option.symbol}
-                    {option.cheaper && (
+                    {/* {option.cheaper && (
                       <span className="flex items-center gap-1 text-xs text-primary group-focus:text-accent-foreground transition-colors">
                         <Sparkles className="w-3 h-3" />
                         Cheaper fees
                       </span>
-                    )}
+                    )} */}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -285,15 +299,15 @@ export function TradeCard() {
             <Separator />
             <div className="space-y-3">
               <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Risk</span>
-                <span className={`font-mono font-medium ${getRiskColor(calculations.riskScore)}`}>
-                  {calculations.riskScore.toFixed(1)}
+                <span className="text-muted-foreground">Risk Ratio</span>
+                <span className={`font-mono font-medium ${getRiskColor(calculations.riskRatio)}`}>
+                  {calculations.riskRatio === Infinity ? "∞" : calculations.riskRatio.toFixed(2)}
                 </span>
               </div>
 
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Liquidation Price</span>
-                <span className="font-mono text-rose-500/80">
+                <span className="font-mono">
                   ${calculations.liqPrice.toFixed(4)}
                 </span>
               </div>
@@ -348,7 +362,7 @@ export function TradeCard() {
                   </Popover>
                 </span>
                 <span className="font-mono">
-                  {calculations.exposure.toFixed(4)} {baseAsset}
+                  {calculations.exposure.toFixed(2)} {baseAsset}
                 </span>
               </div>
             </div>
