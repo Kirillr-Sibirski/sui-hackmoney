@@ -7,20 +7,11 @@ export type Side = "long" | "short";
 export interface Pool {
   id: string;
   name: string;
-  baseAsset: Asset;
-  quoteAsset: Asset;
-  testnetPoolId: string;
+  baseAsset: string;
+  quoteAsset: string;
   maxLeverage: number;
   minOrderSize: number;
   tickSize: number;
-}
-
-export interface Asset {
-  symbol: string;
-  name: string;
-  decimals: number;
-  icon: string;
-  testnetAddress: string;
 }
 
 export interface OpenPositionParams {

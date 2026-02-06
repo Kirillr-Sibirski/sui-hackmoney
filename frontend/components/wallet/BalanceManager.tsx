@@ -19,20 +19,22 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Wallet, Sparkles } from "lucide-react";
+import { CoinIcon } from "@/components/ui/coin-icon";
+import coins from "@/config/coins.json";
 
-// Available assets for deposit/withdraw
-const assets = [
-  { symbol: "USDC", name: "USD Coin", balance: 5000, tradingBalance: 1234.56 },
-  { symbol: "SUI", name: "Sui", balance: 1500, tradingBalance: 0 },
-  { symbol: "ETH", name: "Ethereum", balance: 2.5, tradingBalance: 0 },
-  { symbol: "BTC", name: "Bitcoin", balance: 0.15, tradingBalance: 0 },
-  { symbol: "DEEP", name: "DeepBook", balance: 50000, tradingBalance: 0, cheaper: true },
-];
+// Available assets for deposit/withdraw — derived from coins.json
+const assets = Object.entries(coins.coins).map(([symbol]) => ({
+  symbol,
+  // Mock balances — will be replaced with on-chain data
+  balance: symbol === "DBUSDC" ? 5000 : symbol === "SUI" ? 1500 : 50000,
+  tradingBalance: symbol === "DBUSDC" ? 1234.56 : 0,
+  cheaper: symbol === "DEEP",
+}));
 
 export function BalanceManager() {
   const [action, setAction] = useState("deposit");
   const [amount, setAmount] = useState("");
-  const [selectedAsset, setSelectedAsset] = useState("USDC");
+  const [selectedAsset, setSelectedAsset] = useState("DBUSDC");
 
   const currentAsset = assets.find((a) => a.symbol === selectedAsset) || assets[0];
 
@@ -57,12 +59,16 @@ export function BalanceManager() {
             <Label>Asset</Label>
             <Select value={selectedAsset} onValueChange={setSelectedAsset}>
               <SelectTrigger>
-                <SelectValue placeholder="Select asset" />
+                <span className="flex items-center gap-2">
+                  <CoinIcon symbol={selectedAsset} size={16} />
+                  {selectedAsset}
+                </span>
               </SelectTrigger>
               <SelectContent>
                 {assets.map((asset) => (
                   <SelectItem key={asset.symbol} value={asset.symbol}>
                     <span className="flex items-center gap-2">
+                      <CoinIcon symbol={asset.symbol} size={16} />
                       {asset.symbol}
                       {asset.cheaper && (
                         <span className="flex items-center gap-1 text-xs text-primary">

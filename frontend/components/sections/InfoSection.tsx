@@ -1,6 +1,7 @@
 "use client";
 
-import { Card, CardContent } from "@/components/ui/card";
+import { SpotlightCard } from "@/components/ui/spotlight-card";
+import { PulseDot } from "@/components/ui/pulse-dot";
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
 
@@ -27,39 +28,41 @@ export function InfoSection() {
             your direction and go.
           </p>
           <p className="text-lg text-muted-foreground leading-relaxed">
-            Built on DeepBook V3, Sui's native order book, with sub-second
+            Built on DeepBook V3, Sui&apos;s native order book, with sub-second
             finality and minimal fees.
           </p>
-          <Button variant="outline" className="group">
-            Learn more about Sui
-            <ArrowRight className="ml-2 w-4 h-4 transition-transform group-hover:translate-x-1" />
-          </Button>
+          <div className="flex flex-wrap gap-3">
+            <Button variant="outline" className="group" asChild>
+              <a href="https://deepbook.tech/margin" target="_blank" rel="noopener noreferrer">
+                Learn more about DeepBook Margin
+                <ArrowRight className="ml-2 w-4 h-4 transition-transform group-hover:translate-x-1" />
+              </a>
+            </Button>
+          </div>
         </div>
 
-        <Card className="bg-card/50 backdrop-blur">
-          <CardContent className="p-6">
-            <div className="flex items-center gap-2 mb-6">
-              <div className="w-2 h-2 rounded-full bg-primary" />
-              <span className="text-sm text-primary font-medium">
-                Platform Stats
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              {stats.map((stat) => (
-                <div key={stat.label} className="space-y-2">
-                  <p className="text-sm text-muted-foreground">{stat.label}</p>
-                  <p
-                    className={`text-2xl font-bold ${
-                      stat.highlight ? "text-primary" : ""
-                    }`}
-                  >
-                    {stat.value}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <SpotlightCard className="p-6">
+          <div className="flex items-center gap-2 mb-6">
+            <PulseDot />
+            <span className="text-sm text-primary font-medium">
+              Platform Stats
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            {stats.map((stat) => (
+              <div key={stat.label} className="space-y-2">
+                <p className="text-sm text-muted-foreground">{stat.label}</p>
+                <p
+                  className={`text-2xl font-bold ${
+                    stat.highlight ? "text-primary" : ""
+                  }`}
+                >
+                  {stat.value}
+                </p>
+              </div>
+            ))}
+          </div>
+        </SpotlightCard>
       </div>
 
       <div className="mt-24 space-y-12">
@@ -67,33 +70,35 @@ export function InfoSection() {
           Why Sui?
         </h3>
         <div className="grid md:grid-cols-3 gap-6">
-          <Card>
-            <CardContent className="p-6 space-y-3">
-              <h4 className="font-semibold text-lg">Parallel Execution</h4>
-              <p className="text-sm text-muted-foreground">
-                Sui processes transactions in parallel, enabling unprecedented
-                throughput without compromising security.
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-6 space-y-3">
-              <h4 className="font-semibold text-lg">Sub-Second Finality</h4>
-              <p className="text-sm text-muted-foreground">
-                Transactions finalize in under 400ms. Your trades execute
-                instantly with immediate confirmation.
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-6 space-y-3">
-              <h4 className="font-semibold text-lg">DeepBook V3</h4>
-              <p className="text-sm text-muted-foreground">
-                Native on-chain order book built by Mysten Labs. Deep liquidity,
-                minimal slippage, and trustless execution.
-              </p>
-            </CardContent>
-          </Card>
+          <SpotlightCard className="p-6 space-y-3">
+            <h4 className="font-semibold text-lg">Parallel Execution</h4>
+            <p className="text-sm text-muted-foreground">
+              Sui processes transactions in parallel, enabling unprecedented
+              throughput without compromising security.
+            </p>
+          </SpotlightCard>
+          <SpotlightCard className="p-6 space-y-3">
+            <h4 className="font-semibold text-lg">Sub-Second Finality</h4>
+            <p className="text-sm text-muted-foreground">
+              Transactions finalize in under 400ms. Your trades execute
+              instantly with immediate confirmation.
+            </p>
+          </SpotlightCard>
+          <SpotlightCard className="p-6 space-y-3">
+            <h4 className="font-semibold text-lg">DeepBook V3</h4>
+            <p className="text-sm text-muted-foreground">
+              Native on-chain order book built by Mysten Labs. Deep liquidity,
+              minimal slippage, and trustless execution.
+            </p>
+          </SpotlightCard>
+        </div>
+        <div className="flex justify-center pt-4">
+          <Button variant="outline" className="group" asChild>
+            <a href="https://www.sui.io/" target="_blank" rel="noopener noreferrer">
+              Learn more about Sui
+              <ArrowRight className="ml-2 w-4 h-4 transition-transform group-hover:translate-x-1" />
+            </a>
+          </Button>
         </div>
       </div>
     </section>

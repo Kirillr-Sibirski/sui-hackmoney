@@ -1,7 +1,6 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { BalanceManager } from "@/components/wallet/BalanceManager";
 import { ConnectWalletButton } from "@/components/wallet/ConnectWalletButton";
 import { LayoutDashboard, TrendingUp } from "lucide-react";
 import Link from "next/link";
@@ -46,7 +45,6 @@ export function SimpleHeader() {
         </nav>
       </div>
       <div className="flex items-center gap-3">
-        <BalanceManager />
         <ConnectWalletButton />
       </div>
     </header>
