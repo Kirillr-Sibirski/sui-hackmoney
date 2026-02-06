@@ -48,6 +48,26 @@ export function getMaxLeverage(poolId: string): number {
   return Math.floor((1 / (1 - 1 / r)) * 10) / 10;
 }
 
+/** Get minBorrowRiskRatio for a pool */
+export function getMinBorrowRiskRatio(poolId: string): number {
+  return riskParams[poolId]?.minBorrowRiskRatio ?? 1.25;
+}
+
+/** Get liquidationRiskRatio for a pool */
+export function getLiquidationRiskRatio(poolId: string): number {
+  return riskParams[poolId]?.liquidationRiskRatio ?? 1.1;
+}
+
+/**
+ * Minimum collateral required (in USD) for a given exposure.
+ * C_min = T * (1 - 1/R_min)
+ * where T = exposure in USD, R_min = minBorrowRiskRatio
+ */
+export function getMinCollateralUsd(exposureUsd: number, poolId: string): number {
+  const rMin = getMinBorrowRiskRatio(poolId);
+  return exposureUsd * (1 - 1 / rMin);
+}
+
 /** Get risk color class based on ratio */
 export function getRiskColor(ratio: number): string {
   if (ratio >= 2.0) return "text-emerald-500";
@@ -55,9 +75,9 @@ export function getRiskColor(ratio: number): string {
   return "text-rose-500";
 }
 
-/** Get risk label */
+/** Get risk label — higher ratio = safer, lower ratio = more dangerous */
 export function getRiskLabel(ratio: number): string {
-  if (ratio >= 2.0) return "Safe";
+  if (ratio >= 2.0) return "High";
   if (ratio >= 1.5) return "Moderate";
-  return "High";
+  return "Low";
 }

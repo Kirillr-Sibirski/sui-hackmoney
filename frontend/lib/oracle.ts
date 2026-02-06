@@ -1,30 +1,34 @@
 import { HermesClient } from "@pythnetwork/hermes-client";
 import priceIds from "@/config/price_ids.json";
 
-const HERMES_ENDPOINT = "https://hermes.pyth.network";
+const HERMES_ENDPOINT = "https://hermes-beta.pyth.network";
 
 const client = new HermesClient(HERMES_ENDPOINT, {});
 
-// Map symbol → Pyth price feed ID (USD-denominated)
+// Map symbol → Pyth price feed ID (USD-denominated, stored with 0x prefix)
 const PRICE_FEED_IDS: Record<string, string> = priceIds;
 
 // DBUSDC is treated as 1 USD — no oracle needed
 const STABLECOIN_SYMBOLS = new Set(["DBUSDC"]);
+
+/** Strip 0x prefix for Pyth API calls */
+function stripHex(id: string): string {
+  return id.startsWith("0x") ? id.slice(2) : id;
+}
+
+/** Normalize to 0x-prefixed for internal matching */
+function withHex(id: string): string {
+  return id.startsWith("0x") ? id : "0x" + id;
+}
 
 /** All symbols that have a Pyth price feed */
 export function getOracleSymbols(): string[] {
   return Object.keys(PRICE_FEED_IDS);
 }
 
-/** Get all price feed IDs for fetching */
+/** Get all price feed IDs for fetching (without 0x prefix for Pyth API) */
 export function getAllPriceFeedIds(): string[] {
-  return Object.values(PRICE_FEED_IDS);
-}
-
-/** Get the price feed ID for a symbol, or null if stablecoin/unknown */
-export function getPriceFeedId(symbol: string): string | null {
-  if (STABLECOIN_SYMBOLS.has(symbol)) return null;
-  return PRICE_FEED_IDS[symbol] ?? null;
+  return Object.values(PRICE_FEED_IDS).map(stripHex);
 }
 
 export interface PriceData {
@@ -41,13 +45,19 @@ function parsePythPrice(priceObj: { price: string; expo: number }): number {
   return parseFloat(priceObj.price) * Math.pow(10, priceObj.expo);
 }
 
+/** Find symbol by feed ID (handles with/without 0x prefix) */
+function findSymbolByFeedId(feedId: string): string | undefined {
+  const normalized = withHex(feedId);
+  const symbols = getOracleSymbols();
+  return symbols.find((s) => PRICE_FEED_IDS[s] === normalized);
+}
+
 /**
  * Fetch latest USD prices for all configured symbols from Pyth.
  * Returns a map of symbol → PriceData.
  */
 export async function fetchPrices(): Promise<Record<string, PriceData>> {
-  const symbols = getOracleSymbols();
-  const ids = symbols.map((s) => PRICE_FEED_IDS[s]);
+  const ids = getAllPriceFeedIds();
 
   const result: Record<string, PriceData> = {
     DBUSDC: { price: 1, confidence: 0, timestamp: Date.now() / 1000 },
@@ -59,9 +69,7 @@ export async function fetchPrices(): Promise<Record<string, PriceData>> {
 
   if (updates?.parsed) {
     for (const feed of updates.parsed) {
-      // Match feed ID back to symbol
-      const feedId = "0x" + feed.id;
-      const symbol = symbols.find((s) => PRICE_FEED_IDS[s] === feedId);
+      const symbol = findSymbolByFeedId(feed.id);
       if (symbol && feed.price) {
         result[symbol] = {
           price: parsePythPrice(feed.price),
@@ -104,9 +112,7 @@ export function subscribeToPrices(
           const data = JSON.parse(event.data);
           if (data?.parsed) {
             for (const feed of data.parsed) {
-              const feedId = "0x" + feed.id;
-              const symbols = getOracleSymbols();
-              const symbol = symbols.find((s) => PRICE_FEED_IDS[s] === feedId);
+              const symbol = findSymbolByFeedId(feed.id);
               if (symbol && feed.price) {
                 prices[symbol] = {
                   price: parsePythPrice(feed.price),

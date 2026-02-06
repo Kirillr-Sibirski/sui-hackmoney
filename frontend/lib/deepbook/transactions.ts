@@ -1,137 +1,221 @@
 /**
  * DeepBook Margin Transaction Builders
  *
- * This module provides functions for building DeepBook margin transactions.
- * These can be used with the wallet's signAndExecuteTransaction.
+ * Uses the @mysten/deepbook-v3 SDK to build real margin transactions.
+ * All steps can be combined into a single Programmable Transaction Block (PTB).
  */
 
 import { Transaction } from "@mysten/sui/transactions";
-import type { SuiGrpcClient } from "@mysten/sui/grpc";
-import type {
-  OpenPositionParams,
-  ClosePositionParams,
-  DepositParams,
-  WithdrawParams,
-  Side,
-} from "./types";
+import { DeepBookClient } from "@mysten/deepbook-v3";
+import type { MarginManager } from "@mysten/deepbook-v3";
 
 /**
- * Build a transaction to open a leveraged position
- *
- * TODO: Implement using DeepBook margin contracts when ready
+ * Build a transaction to create a new margin manager for a pool.
+ * The manager must exist before deposits/borrows/orders can be made.
  */
-export async function buildOpenPositionTx(
-  _suiClient: SuiGrpcClient,
-  params: OpenPositionParams
-): Promise<Transaction> {
+export function buildNewMarginManagerTx(
+  client: DeepBookClient,
+  poolKey: string
+): Transaction {
   const tx = new Transaction();
-
-  // TODO: Implement actual DeepBook margin position opening
-  // This will involve:
-  // 1. Getting the margin pool
-  // 2. Creating a margin account if needed
-  // 3. Depositing collateral
-  // 4. Opening a leveraged position using MarginPoolContract
-
-  console.log("Building open position transaction:", params);
-
-  // Placeholder - actual implementation will use DeepBook SDK margin contracts
-  // Example flow:
-  // 1. Get or create margin account using createDeepBookClient()
-  // 2. Deposit collateral using MarginManagerContract
-  // 3. Open position using MarginPoolContract
-
+  client.marginManager.newMarginManager(poolKey)(tx);
   return tx;
 }
 
 /**
- * Build a transaction to close a position
+ * Extract the MarginManager object ID from a transaction result.
+ * After executing newMarginManager, the created shared object ID is found
+ * in the transaction effects' changedObjects.
  */
-export async function buildClosePositionTx(
-  _suiClient: SuiGrpcClient,
-  params: ClosePositionParams
-): Promise<Transaction> {
-  const tx = new Transaction();
-
-  // TODO: Implement actual position closing using MarginPoolContract
-  console.log("Building close position transaction:", params);
-
-  return tx;
-}
-
-/**
- * Build a transaction to deposit collateral to margin account
- */
-export async function buildDepositTx(
-  _suiClient: SuiGrpcClient,
-  params: DepositParams
-): Promise<Transaction> {
-  const tx = new Transaction();
-
-  // TODO: Implement deposit using MarginManagerContract
-  console.log("Building deposit transaction:", params);
-
-  return tx;
-}
-
-/**
- * Build a transaction to withdraw from margin account
- */
-export async function buildWithdrawTx(
-  _suiClient: SuiGrpcClient,
-  params: WithdrawParams
-): Promise<Transaction> {
-  const tx = new Transaction();
-
-  // TODO: Implement withdrawal using MarginManagerContract
-  console.log("Building withdraw transaction:", params);
-
-  return tx;
-}
-
-/**
- * Calculate estimated liquidation price for a position
- */
-export function calculateLiquidationPrice(
-  entryPrice: number,
-  leverage: number,
-  side: Side,
-  maintenanceMargin: number = 0.05 // 5% maintenance margin
-): number {
-  const liquidationDistance = (1 - maintenanceMargin) / leverage;
-
-  if (side === "long") {
-    return entryPrice * (1 - liquidationDistance);
-  } else {
-    return entryPrice * (1 + liquidationDistance);
+export function extractMarginManagerAddress(
+  result: {
+    $kind: string;
+    Transaction?: {
+      objectTypes?: Record<string, string>;
+      effects?: {
+        changedObjects?: Array<{
+          objectId: string;
+          idOperation: string;
+        }>;
+      };
+    };
   }
+): string | null {
+  if (result.$kind === "FailedTransaction" || !result.Transaction) {
+    return null;
+  }
+
+  const objectTypes = result.Transaction.objectTypes ?? {};
+  const changedObjects = result.Transaction.effects?.changedObjects ?? [];
+
+  const managerObj = changedObjects.find(
+    (obj) =>
+      obj.idOperation === "Created" &&
+      objectTypes[obj.objectId]?.includes("MarginManager")
+  );
+
+  return managerObj?.objectId ?? null;
 }
 
 /**
- * Calculate position size from collateral and leverage
+ * Create a DeepBookClient configured with known margin managers.
  */
-export function calculatePositionSize(
-  collateral: number,
-  leverage: number
-): number {
-  return collateral * leverage;
+export function createClientWithManagers(
+  suiClient: any,
+  address: string,
+  marginManagers: Record<string, MarginManager>
+): DeepBookClient {
+  return new DeepBookClient({
+    client: suiClient,
+    network: "testnet",
+    address,
+    marginManagers,
+  });
 }
 
 /**
- * Calculate risk score (2.0 = safe, 1.0 = near liquidation)
+ * Determine which deposit function to use based on collateral asset
+ * relative to the pool's base/quote assets.
  */
-export function calculateRiskScore(
-  currentPrice: number,
-  liquidationPrice: number,
-  side: Side
-): number {
-  const distanceToLiquidation =
-    side === "long"
-      ? (currentPrice - liquidationPrice) / currentPrice
-      : (liquidationPrice - currentPrice) / currentPrice;
+function getDepositFn(
+  client: DeepBookClient,
+  collateralSymbol: string,
+  baseAsset: string,
+  _quoteAsset: string
+) {
+  if (collateralSymbol === "DEEP") {
+    return client.marginManager.depositDeep.bind(client.marginManager);
+  }
+  if (collateralSymbol === baseAsset) {
+    return client.marginManager.depositBase.bind(client.marginManager);
+  }
+  // quoteAsset or any other — depositQuote
+  return client.marginManager.depositQuote.bind(client.marginManager);
+}
 
-  // Normalize to 1.0-2.0 scale
-  // At liquidation: 1.0, Far from liquidation: 2.0
-  const score = 1 + Math.min(1, Math.max(0, distanceToLiquidation * 2));
-  return Math.round(score * 10) / 10;
+/** Generate a unique client order ID */
+function generateClientOrderId(): string {
+  return Date.now().toString() + Math.floor(Math.random() * 1000).toString();
+}
+
+/**
+ * Build a single PTB that deposits collateral, borrows, and places a market order.
+ *
+ * Steps in one transaction:
+ *   1. Deposit collateral (depositBase/Quote/Deep)
+ *   2. Borrow debt (borrowBase/Quote)
+ *   3. Place market order via poolProxy (placeMarketOrder)
+ *
+ * @param client           - DeepBookClient with marginManagers configured
+ * @param managerKey       - The margin manager key (maps to { address, poolKey })
+ * @param poolKey          - The pool key (e.g. "SUI_DBUSDC")
+ * @param baseAsset        - Base asset symbol (e.g. "SUI")
+ * @param quoteAsset       - Quote asset symbol (e.g. "DBUSDC")
+ * @param collateralSymbol - Which asset the user deposits as collateral
+ * @param collateralAmount - Human-readable collateral amount
+ * @param side             - "long" or "short"
+ * @param borrowAmount     - Human-readable borrow amount (in borrowed asset)
+ * @param orderQuantity    - Market order quantity in base asset (= amount * leverage)
+ */
+export function buildOpenPositionTx(
+  client: DeepBookClient,
+  managerKey: string,
+  poolKey: string,
+  baseAsset: string,
+  quoteAsset: string,
+  collateralSymbol: string,
+  collateralAmount: number,
+  side: "long" | "short",
+  borrowAmount: number,
+  orderQuantity: number
+): Transaction {
+  const tx = new Transaction();
+
+  // Step 1: Deposit collateral
+  const depositFn = getDepositFn(client, collateralSymbol, baseAsset, quoteAsset);
+  depositFn({ managerKey, amount: collateralAmount })(tx);
+
+  // Step 2: Borrow — direction determines which asset to borrow
+  // Long: borrow quote (to buy more base)
+  // Short: borrow base (to sell for quote)
+  if (side === "long") {
+    client.marginManager.borrowQuote(managerKey, borrowAmount)(tx);
+  } else {
+    client.marginManager.borrowBase(managerKey, borrowAmount)(tx);
+  }
+
+  // Step 3: Place market order
+  // isBid = true for long (buying base), false for short (selling base)
+  client.poolProxy.placeMarketOrder({
+    poolKey,
+    marginManagerKey: managerKey,
+    clientOrderId: generateClientOrderId(),
+    quantity: orderQuantity,
+    isBid: side === "long",
+    payWithDeep: collateralSymbol === "DEEP",
+  })(tx);
+
+  return tx;
+}
+
+/**
+ * Build a transaction to deposit collateral only.
+ */
+export function buildDepositTx(
+  client: DeepBookClient,
+  managerKey: string,
+  baseAsset: string,
+  quoteAsset: string,
+  collateralSymbol: string,
+  amount: number
+): Transaction {
+  const tx = new Transaction();
+  const depositFn = getDepositFn(client, collateralSymbol, baseAsset, quoteAsset);
+  depositFn({ managerKey, amount })(tx);
+  return tx;
+}
+
+/**
+ * Build a transaction to withdraw collateral.
+ */
+export function buildWithdrawTx(
+  client: DeepBookClient,
+  managerKey: string,
+  baseAsset: string,
+  collateralSymbol: string,
+  amount: number
+): Transaction {
+  const tx = new Transaction();
+
+  if (collateralSymbol === "DEEP") {
+    client.marginManager.withdrawDeep(managerKey, amount)(tx);
+  } else if (collateralSymbol === baseAsset) {
+    client.marginManager.withdrawBase(managerKey, amount)(tx);
+  } else {
+    client.marginManager.withdrawQuote(managerKey, amount)(tx);
+  }
+
+  return tx;
+}
+
+/**
+ * Build a transaction to repay debt.
+ * If amount is undefined, repays the entire debt.
+ */
+export function buildRepayTx(
+  client: DeepBookClient,
+  managerKey: string,
+  side: "long" | "short",
+  amount?: number
+): Transaction {
+  const tx = new Transaction();
+
+  // Repay the asset that was borrowed
+  if (side === "long") {
+    client.marginManager.repayQuote(managerKey, amount)(tx);
+  } else {
+    client.marginManager.repayBase(managerKey, amount)(tx);
+  }
+
+  return tx;
 }
