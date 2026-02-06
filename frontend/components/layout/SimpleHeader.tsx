@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { BalanceManager } from "@/components/wallet/BalanceManager";
+import { ConnectWalletButton } from "@/components/wallet/ConnectWalletButton";
 import { LayoutDashboard, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -27,8 +28,8 @@ export function SimpleHeader() {
             size="sm"
             asChild
           >
-            <Link href="/">
-              <TrendingUp className="w-4 h-4 mr-2" />
+            <Link href="/" className="gap-1.5">
+              <TrendingUp className="w-4 h-4" />
               Trade
             </Link>
           </Button>
@@ -37,8 +38,8 @@ export function SimpleHeader() {
             size="sm"
             asChild
           >
-            <Link href="/dashboard">
-              <LayoutDashboard className="w-4 h-4 mr-2" />
+            <Link href="/dashboard" className="gap-1.5">
+              <LayoutDashboard className="w-4 h-4" />
               Dashboard
             </Link>
           </Button>
@@ -46,7 +47,7 @@ export function SimpleHeader() {
       </div>
       <div className="flex items-center gap-3">
         <BalanceManager />
-        <Button>Connect Wallet</Button>
+        <ConnectWalletButton />
       </div>
     </header>
   );

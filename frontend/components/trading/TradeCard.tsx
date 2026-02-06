@@ -15,17 +15,39 @@ import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SpotlightCard } from "@/components/ui/spotlight-card";
 import { Separator } from "@/components/ui/separator";
+import { Sparkles } from "lucide-react";
 import pools from "@/config/pools.json";
+
+// Mock prices for different assets
+const mockPrices: Record<string, number> = {
+  SUI: 3.45,
+  ETH: 3820.5,
+  BTC: 97500,
+  USDC: 1,
+  DEEP: 0.042,
+};
 
 export function TradeCard() {
   const [side, setSide] = useState("long");
   const [leverage, setLeverage] = useState([2]);
   const [selectedPool, setSelectedPool] = useState(pools.pools[0].id);
   const [amount, setAmount] = useState("");
+  const [collateral, setCollateral] = useState("USDC");
 
-  const currentPrice = 3.45; // Mock price
+  const pool = pools.pools.find((p) => p.id === selectedPool) || pools.pools[0];
+  const baseAsset = pool.baseAsset.symbol;
+  const quoteAsset = pool.quoteAsset.symbol;
+  const currentPrice = mockPrices[baseAsset] || 1;
+
   const amountNum = parseFloat(amount) || 0;
   const leverageNum = leverage[0];
+
+  // Collateral options: base asset, quote asset, and DEEP
+  const collateralOptions = [
+    { symbol: quoteAsset, label: quoteAsset, cheaper: false },
+    { symbol: baseAsset, label: baseAsset, cheaper: false },
+    { symbol: "DEEP", label: "DEEP", cheaper: true },
+  ];
 
   const calculations = useMemo(() => {
     if (amountNum <= 0) return null;
@@ -37,26 +59,31 @@ export function TradeCard() {
         ? currentPrice * (1 - liquidationDistance + 0.01)
         : currentPrice * (1 + liquidationDistance - 0.01);
 
-    // Risk score: 1-10 based on leverage and position size
-    const riskScore = Math.min(10, Math.round(leverageNum * 1.5 + (amountNum > 500 ? 2 : 0)));
+    // Exposure in the base asset
+    const exposure = positionSize / currentPrice;
+
+    // Risk score: 2.0 = safe, 1.0 = near liquidation
+    // Higher leverage = lower score (closer to liquidation)
+    const riskScore = Math.max(1, Math.min(2, 2.5 - leverageNum * 0.3));
 
     return {
       positionSize,
       liqPrice,
+      exposure,
       riskScore,
     };
   }, [amountNum, leverageNum, side, currentPrice]);
 
   const getRiskColor = (score: number) => {
-    if (score <= 3) return "text-emerald-500";
-    if (score <= 6) return "text-yellow-500";
+    if (score >= 1.8) return "text-emerald-500";
+    if (score >= 1.4) return "text-yellow-500";
     return "text-rose-500";
   };
 
   const getRiskLabel = (score: number) => {
-    if (score <= 3) return "Low";
-    if (score <= 6) return "Medium";
-    return "High";
+    if (score >= 1.8) return "Safe";
+    if (score >= 1.4) return "Moderate";
+    return "At Risk";
   };
 
   return (
@@ -121,6 +148,30 @@ export function TradeCard() {
           />
         </div>
 
+        <div className="space-y-2">
+          <Label>Collateral Asset</Label>
+          <Select value={collateral} onValueChange={setCollateral}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select collateral" />
+            </SelectTrigger>
+            <SelectContent>
+              {collateralOptions.map((option) => (
+                <SelectItem key={option.symbol} value={option.symbol}>
+                  <span className="flex items-center gap-2">
+                    {option.label}
+                    {option.cheaper && (
+                      <span className="flex items-center gap-1 text-xs text-primary">
+                        <Sparkles className="w-3 h-3" />
+                        Cheaper fees
+                      </span>
+                    )}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         <div className="space-y-3">
           <div className="flex justify-between">
             <Label>Leverage</Label>
@@ -153,36 +204,40 @@ export function TradeCard() {
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Est. Liq. Price</span>
+                <span className="text-muted-foreground">Exposure</span>
                 <span className="font-mono">
+                  {calculations.exposure.toFixed(4)} {baseAsset}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Liquidation Price</span>
+                <span className="font-mono text-rose-500/80">
                   ${calculations.liqPrice.toFixed(4)}
                 </span>
               </div>
               <div className="flex justify-between text-sm items-center">
-                <span className="text-muted-foreground">Risk Level</span>
+                <span className="text-muted-foreground">Risk</span>
                 <div className="flex items-center gap-2">
-                  <div className="flex gap-0.5">
-                    {[...Array(10)].map((_, i) => (
-                      <div
-                        key={i}
-                        className={`w-1.5 h-3 rounded-sm ${
-                          i < calculations.riskScore
-                            ? calculations.riskScore <= 3
-                              ? "bg-emerald-500"
-                              : calculations.riskScore <= 6
-                              ? "bg-yellow-500"
-                              : "bg-rose-500"
-                            : "bg-muted"
-                        }`}
-                      />
-                    ))}
+                  <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        calculations.riskScore >= 1.8
+                          ? "bg-emerald-500"
+                          : calculations.riskScore >= 1.4
+                          ? "bg-yellow-500"
+                          : "bg-rose-500"
+                      }`}
+                      style={{
+                        width: `${((calculations.riskScore - 1) / 1) * 100}%`,
+                      }}
+                    />
                   </div>
                   <span
                     className={`text-xs font-medium ${getRiskColor(
                       calculations.riskScore
                     )}`}
                   >
-                    {getRiskLabel(calculations.riskScore)}
+                    {calculations.riskScore.toFixed(1)} ({getRiskLabel(calculations.riskScore)})
                   </span>
                 </div>
               </div>

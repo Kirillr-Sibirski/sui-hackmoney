@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { DAppKitProvider } from "@/components/providers/DAppKitProvider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Ōshio - Margin Trading on Sui",
+  title: "Oshio - Margin Trading on Sui",
   description: "Decentralized margin trading platform powered by DeepBook V3",
 };
 
@@ -27,7 +28,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <DAppKitProvider>{children}</DAppKitProvider>
       </body>
     </html>
   );

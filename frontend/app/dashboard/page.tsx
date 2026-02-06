@@ -1,6 +1,7 @@
 import { SimpleHeader } from "@/components/layout/SimpleHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { FloatingIcons } from "@/components/ui/floating-icons";
 import Link from "next/link";
 
 const mockPositions = [
@@ -36,29 +37,33 @@ export default function DashboardPage() {
   const totalSize = mockPositions.reduce((acc, p) => acc + p.size, 0);
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background relative">
+      <FloatingIcons />
       <SimpleHeader />
 
-      <main className="max-w-4xl mx-auto px-4 py-8">
+      <main className="relative z-10 max-w-5xl mx-auto px-8 lg:px-16 py-8">
         <div className="mb-8">
           <h1 className="text-2xl font-bold">Dashboard</h1>
-          <p className="text-muted-foreground">
-            Manage your positions
-          </p>
+          <p className="text-muted-foreground">Manage your positions</p>
         </div>
 
         {/* Stats */}
-        <Card className="mb-8">
+        <Card className="mb-8 border-primary/20">
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">Total Position Size</p>
-            <p className="text-2xl font-bold">${totalSize.toLocaleString()}</p>
+            <p className="text-3xl font-bold text-primary">
+              ${totalSize.toLocaleString()}
+            </p>
           </CardContent>
         </Card>
 
         {/* Positions */}
         <Card>
           <CardHeader>
-            <CardTitle>Open Positions</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-primary" />
+              Open Positions
+            </CardTitle>
           </CardHeader>
           <CardContent>
             {mockPositions.length === 0 ? (
@@ -75,7 +80,7 @@ export default function DashboardPage() {
                   return (
                     <div
                       key={position.id}
-                      className="border rounded-lg p-4"
+                      className="border rounded-lg p-4 hover:border-primary/30 transition-colors"
                     >
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-3">
@@ -89,7 +94,7 @@ export default function DashboardPage() {
                             {position.side}
                           </span>
                           <span className="font-medium">{position.pool}</span>
-                          <span className="text-muted-foreground text-sm">
+                          <span className="text-primary text-sm font-medium">
                             {position.leverage}x
                           </span>
                         </div>
@@ -101,7 +106,9 @@ export default function DashboardPage() {
                       <div className="grid grid-cols-4 gap-4 text-sm">
                         <div>
                           <p className="text-muted-foreground">Size</p>
-                          <p className="font-mono font-medium">${position.size}</p>
+                          <p className="font-mono font-medium">
+                            ${position.size}
+                          </p>
                         </div>
                         <div>
                           <p className="text-muted-foreground">Current Price</p>
@@ -111,13 +118,15 @@ export default function DashboardPage() {
                         </div>
                         <div>
                           <p className="text-muted-foreground">Liq. Price</p>
-                          <p className="font-mono font-medium">
+                          <p className="font-mono font-medium text-rose-500/80">
                             ${position.liqPrice.toLocaleString()}
                           </p>
                         </div>
                         <div>
                           <p className="text-muted-foreground">Risk</p>
-                          <p className={`font-mono font-medium ${riskStatus.color}`}>
+                          <p
+                            className={`font-mono font-medium ${riskStatus.color}`}
+                          >
                             {position.risk.toFixed(1)} ({riskStatus.label})
                           </p>
                         </div>

@@ -10,12 +10,31 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Wallet } from "lucide-react";
+import { Wallet, Sparkles } from "lucide-react";
+
+// Available assets for deposit/withdraw
+const assets = [
+  { symbol: "USDC", name: "USD Coin", balance: 5000, tradingBalance: 1234.56 },
+  { symbol: "SUI", name: "Sui", balance: 1500, tradingBalance: 0 },
+  { symbol: "ETH", name: "Ethereum", balance: 2.5, tradingBalance: 0 },
+  { symbol: "BTC", name: "Bitcoin", balance: 0.15, tradingBalance: 0 },
+  { symbol: "DEEP", name: "DeepBook", balance: 50000, tradingBalance: 0, cheaper: true },
+];
 
 export function BalanceManager() {
   const [action, setAction] = useState("deposit");
   const [amount, setAmount] = useState("");
+  const [selectedAsset, setSelectedAsset] = useState("USDC");
+
+  const currentAsset = assets.find((a) => a.symbol === selectedAsset) || assets[0];
 
   return (
     <Popover>
@@ -35,13 +54,41 @@ export function BalanceManager() {
           </div>
 
           <div className="space-y-2">
+            <Label>Asset</Label>
+            <Select value={selectedAsset} onValueChange={setSelectedAsset}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select asset" />
+              </SelectTrigger>
+              <SelectContent>
+                {assets.map((asset) => (
+                  <SelectItem key={asset.symbol} value={asset.symbol}>
+                    <span className="flex items-center gap-2">
+                      {asset.symbol}
+                      {asset.cheaper && (
+                        <span className="flex items-center gap-1 text-xs text-primary">
+                          <Sparkles className="w-3 h-3" />
+                          Lower fees
+                        </span>
+                      )}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Trading Balance</span>
-              <span className="font-medium">1,234.56 USDC</span>
+              <span className="font-medium">
+                {currentAsset.tradingBalance.toLocaleString()} {currentAsset.symbol}
+              </span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Wallet Balance</span>
-              <span className="font-medium">5,000.00 USDC</span>
+              <span className="font-medium">
+                {currentAsset.balance.toLocaleString()} {currentAsset.symbol}
+              </span>
             </div>
           </div>
 
@@ -73,7 +120,7 @@ export function BalanceManager() {
           </Tabs>
 
           <div className="space-y-3">
-            <Label>Amount (USDC)</Label>
+            <Label>Amount ({currentAsset.symbol})</Label>
             <Input
               type="number"
               placeholder="0.00"
@@ -81,15 +128,19 @@ export function BalanceManager() {
               onChange={(e) => setAmount(e.target.value)}
             />
             <div className="flex gap-2">
-              {["100", "500", "1000"].map((val) => (
+              {["25%", "50%", "75%"].map((pct) => (
                 <Button
-                  key={val}
+                  key={pct}
                   variant="outline"
                   size="sm"
                   className="flex-1"
-                  onClick={() => setAmount(val)}
+                  onClick={() => {
+                    const maxVal = action === "deposit" ? currentAsset.balance : currentAsset.tradingBalance;
+                    const percentage = parseInt(pct) / 100;
+                    setAmount((maxVal * percentage).toString());
+                  }}
                 >
-                  {val}
+                  {pct}
                 </Button>
               ))}
               <Button
@@ -97,7 +148,11 @@ export function BalanceManager() {
                 size="sm"
                 className="flex-1"
                 onClick={() =>
-                  setAmount(action === "deposit" ? "5000" : "1234.56")
+                  setAmount(
+                    action === "deposit"
+                      ? currentAsset.balance.toString()
+                      : currentAsset.tradingBalance.toString()
+                  )
                 }
               >
                 Max
@@ -106,7 +161,7 @@ export function BalanceManager() {
           </div>
 
           <Button className="w-full">
-            {action === "deposit" ? "Deposit to Margin" : "Withdraw to Wallet"}
+            {action === "deposit" ? `Deposit ${currentAsset.symbol}` : `Withdraw ${currentAsset.symbol}`}
           </Button>
         </div>
       </PopoverContent>
