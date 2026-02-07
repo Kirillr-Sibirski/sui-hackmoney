@@ -56,52 +56,24 @@ npx shadcn@latest add <component-name>
 Components will be added to `components/ui/` with RSC support enabled.
 
 <!-- ## Prompt Sequence
-1/
-Now we need to display all the open positions in the dashboard. Here is how we do it: 
- @description Get comprehensive state information for a margin manager
-	 * @param {string} poolKey The key to identify the pool
-	 * @param {string} marginManagerId The ID of the margin manager
-	 * @returns A function that takes a Transaction object
-	 * @returns Returns (manager_id, deepbook_pool_id, risk_ratio, base_asset, quote_asset,
-	 *                   base_debt, quote_debt, base_pyth_price, base_pyth_decimals,
-	 *                   quote_pyth_price, quote_pyth_decimals)
-	 */
-	managerState = (poolKey: string, marginManagerId: string) => (tx: Transaction) => {
-		const pool = this.#config.getPool(poolKey);
-		const baseCoin = this.#config.getCoin(pool.baseCoin);
-		const quoteCoin = this.#config.getCoin(pool.quoteCoin);
-		const baseMarginPool = this.#config.getMarginPool(pool.baseCoin);
-		const quoteMarginPool = this.#config.getMarginPool(pool.quoteCoin);
-		return tx.moveCall({
-			target: `${this.#config.MARGIN_PACKAGE_ID}::margin_manager::manager_state`,
-			arguments: [
-				tx.object(marginManagerId),
-				tx.object(this.#config.MARGIN_REGISTRY_ID),
-				tx.object(baseCoin.priceInfoObjectId!),
-				tx.object(quoteCoin.priceInfoObjectId!),
-				tx.object(pool.address),
-				tx.object(baseMarginPool.address),
-				tx.object(quoteMarginPool.address),
-				tx.object.clock(),
-			],
-			typeArguments: [baseCoin.type, quoteCoin.type],
-		});
-	};
+1/ Rediect the user to the dashboard page once the position was opened successfully.
 
-2/ And then to get the current interest rate:
-	/**
-	 * @description Get the current interest rate
-	 * @param {string} coinKey The key to identify the pool
-	 * @returns A function that takes a Transaction object
-	 */
-	interestRate = (coinKey: string) => (tx: Transaction) => {
-		const marginPool = this.#config.getMarginPool(coinKey);
-		return tx.moveCall({
-			target: `${this.#config.MARGIN_PACKAGE_ID}::margin_pool::interest_rate`,
-			arguments: [tx.object(marginPool.address)],
-			typeArguments: [marginPool.type],
-		});
-	};
-By calling the marginPool.ts in the SDK
-3/ Better show when the user doesn't have enough funds in their wallet
+
+2/ The **interest** rate is displayed as 0% APR for some reason for all the pools, look into that and fix the problem pls. Double check how you fetch the APRs. You can get the current borrow interest rate from the Margin Pool via the DeepBook Margin SDK’s read‑only functions.
+
+Using the Margin Pool SDK (TypeScript)
+The SDK exposes an interestRate read function keyed by the asset/pool:
+
+// Assume you have a configured DeepBookClient with marginPoolContract
+const coinKey = 'USDC'; // or 'SUI', 'DEEP', etc.
+
+const tx = new Transaction();
+const interestRate = tx.add(
+  client.marginPoolContract.interestRate(coinKey),
+);
+
+// Then dry-run or execute the PTB to read the value
+This interestRate(coinKey) call returns the current borrow APR for that margin pool, computed from utilization and the pool’s InterestConfig (base rate, slopes, optimal utilization, etc.).[Margin Pool SDK read-only; Interest rates]
+
+
  -->

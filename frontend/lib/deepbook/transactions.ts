@@ -7,7 +7,9 @@
 
 import { Transaction } from "@mysten/sui/transactions";
 import { DeepBookClient } from "@mysten/deepbook-v3";
+import { bcs } from "@mysten/sui/bcs";
 import type { MarginManager } from "@mysten/deepbook-v3";
+import coins from "@/config/coins.json";
 
 /** Generate a unique client order ID */
 function generateClientOrderId(): string {
@@ -122,24 +124,24 @@ export function buildBorrowAndOrderTx(
   // Step 1: Borrow (skip if fully collateralized)
   console.log("borrowing the asset... the manager key is", managerKey)
   if (borrowAmount > 0) {
+    console.log("Borrow amount", borrowAmount);
     if (side === "long") {
-      client.marginManager.borrowQuote(managerKey, borrowAmount)(tx);
+      client.marginManager.borrowQuote(managerKey, Number(borrowAmount))(tx);
     } else {
       client.marginManager.borrowBase(managerKey, borrowAmount)(tx);
     }
   }
-  console.log("asset borrowed")
 
-  // Step 2: Place market order
-  client.poolProxy.placeMarketOrder({
-    poolKey,
-    marginManagerKey: managerKey,
-    clientOrderId: generateClientOrderId(),
-    quantity: orderQuantity,
-    isBid: side === "long",
-    payWithDeep,
-  })(tx);
-  console.log("placed market order", tx)
+  // // Step 2: Place market order
+  // client.poolProxy.placeMarketOrder({
+  //   poolKey,
+  //   marginManagerKey: managerKey,
+  //   clientOrderId: generateClientOrderId(),
+  //   quantity: orderQuantity,
+  //   isBid: side === "long",
+  //   payWithDeep,
+  // })(tx);
+  // console.log("placed market order", tx)
 
   return tx;
 }
@@ -289,9 +291,9 @@ export function buildClosePositionTx(
 ): Transaction {
   const tx = new Transaction();
 
-  // Step 1: Place reduce-only market order to close the position
+  // Step 1: Place market order to close the position
   // Long → sell base (isBid=false), Short → buy base (isBid=true)
-  client.poolProxy.placeReduceOnlyMarketOrder({
+  client.poolProxy.placeMarketOrder({
     poolKey,
     marginManagerKey: managerKey,
     clientOrderId: generateClientOrderId(),
@@ -337,6 +339,32 @@ export function buildWithdrawAllCollateralTx(
 }
 
 /**
+ * Build a transaction to withdraw ALL remaining assets (base + quote) from the manager.
+ * Used after closing a position when we don't know the exact remaining breakdown.
+ * Skips assets with zero balance.
+ */
+export function buildWithdrawAllRemainingTx(
+  client: DeepBookClient,
+  managerKey: string,
+  baseAsset: string,
+  baseAmount: number,
+  quoteAmount: number
+): Transaction {
+  const tx = new Transaction();
+
+  console.log("[buildWithdrawAllRemainingTx]", { managerKey, baseAsset, baseAmount, quoteAmount });
+
+  if (baseAmount > 0) {
+    client.marginManager.withdrawBase(managerKey, baseAmount)(tx);
+  }
+  if (quoteAmount > 0) {
+    client.marginManager.withdrawQuote(managerKey, quoteAmount)(tx);
+  }
+
+  return tx;
+}
+
+/**
  * Check if an error is a user wallet rejection.
  */
 export function isUserRejection(err: unknown): boolean {
@@ -363,4 +391,151 @@ export function formatTxError(err: unknown): string {
     return `Error: ${msg.slice(0, 117)}...`;
   }
   return `Error: ${msg}`;
+}
+
+const FLOAT_SCALAR = 1e9;
+
+/** Decode BCS u64 from base64 string, Uint8Array, or indexed object {0:n, 1:n, ...} */
+function decodeBcsU64(value: string | Uint8Array | Record<string, number>): bigint {
+  let bytes: Uint8Array;
+  if (typeof value === "string") {
+    bytes = Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
+  } else if (value instanceof Uint8Array) {
+    bytes = value;
+  } else {
+    // Object like {0: 96, 1: 191, ...} from simulation result
+    const len = Object.keys(value).length;
+    bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = value[i];
+  }
+  const parsed = bcs.u64().parse(bytes);
+  return typeof parsed === "string" ? BigInt(parsed) : BigInt(parsed);
+}
+
+export type MarginPoolState = {
+  totalSupply: number;
+  totalBorrow: number;
+  maxUtilizationRate: number;
+  available: number; // totalSupply * maxUtilizationRate - totalBorrow
+  coinKey: string;
+};
+
+/**
+ * Query a margin pool's liquidity state (totalSupply, totalBorrow, maxUtilizationRate)
+ * via a single simulation with 3 moveCall commands.
+ */
+export async function queryMarginPoolState(
+  client: DeepBookClient,
+  suiClient: any,
+  senderAddress: string,
+  coinKey: string
+): Promise<MarginPoolState> {
+  const coinConfig = (coins.coins as Record<string, { decimals: number }>)[coinKey];
+  const scalar = Math.pow(10, coinConfig?.decimals ?? 6);
+
+  const tx = new Transaction();
+  tx.setSender(senderAddress);
+
+  // cmd 0: totalSupply
+  client.marginPool.totalSupply(coinKey)(tx);
+  // cmd 1: totalBorrow
+  client.marginPool.totalBorrow(coinKey)(tx);
+  // cmd 2: maxUtilizationRate
+  client.marginPool.maxUtilizationRate(coinKey)(tx);
+
+  const simResult = await suiClient.core.simulateTransaction({
+    transaction: tx,
+    include: { commandResults: true },
+  });
+
+  if (simResult.$kind === "FailedTransaction") {
+    throw new Error(`Pool state query failed: ${JSON.stringify(simResult.FailedTransaction)}`);
+  }
+
+  // commandResults is a top-level key on simResult (not nested inside .Transaction)
+  const cmds = (simResult as any).commandResults;
+  if (!cmds || cmds.length < 3) {
+    console.error("[queryMarginPoolState] Unexpected simResult:", JSON.stringify(simResult, null, 2).slice(0, 2000));
+    throw new Error(`Unexpected simulation result: cmdsLen=${cmds?.length}`);
+  }
+
+  const totalSupplyRaw = Number(decodeBcsU64(cmds[0].returnValues[0].bcs));
+  const totalBorrowRaw = Number(decodeBcsU64(cmds[1].returnValues[0].bcs));
+  const maxUtilRaw = Number(decodeBcsU64(cmds[2].returnValues[0].bcs));
+
+  const totalSupply = totalSupplyRaw / scalar;
+  const totalBorrow = totalBorrowRaw / scalar;
+  const maxUtilizationRate = maxUtilRaw / FLOAT_SCALAR;
+  const available = totalSupply * maxUtilizationRate - totalBorrow;
+
+  return { totalSupply, totalBorrow, maxUtilizationRate, available, coinKey };
+}
+
+/**
+ * Build a PTB that mints a SupplierCap and supplies liquidity to a margin pool.
+ * Combines both steps in a single transaction.
+ */
+export function buildSupplyToPoolTx(
+  client: DeepBookClient,
+  coinKey: string,
+  amount: number
+): Transaction {
+  const tx = new Transaction();
+
+  // Step 1: Mint a SupplierCap
+  const supplierCap = client.marginPool.mintSupplierCap()(tx);
+
+  // Step 2: Supply to the margin pool (positional args: coinKey, supplierCap, amount)
+  client.marginPool.supplyToMarginPool(coinKey, supplierCap, amount)(tx);
+
+  return tx;
+}
+
+/**
+ * Query current base/quote balances and debts of a margin manager.
+ * Used to get accurate balances after a close/repay before withdrawing.
+ */
+export async function queryManagerBalances(
+  client: DeepBookClient,
+  suiClient: any,
+  senderAddress: string,
+  poolKey: string,
+  managerAddress: string,
+  baseSymbol: string,
+  quoteSymbol: string
+): Promise<{ baseAsset: number; quoteAsset: number; baseDebt: number; quoteDebt: number }> {
+  const coinConfig = coins.coins as Record<string, { decimals: number }>;
+  const baseScalar = Math.pow(10, coinConfig[baseSymbol]?.decimals ?? 9);
+  const quoteScalar = Math.pow(10, coinConfig[quoteSymbol]?.decimals ?? 6);
+
+  const tx = new Transaction();
+  tx.setSender(senderAddress);
+
+  client.marginManager.managerState(poolKey, managerAddress)(tx);
+
+  const simResult = await suiClient.core.simulateTransaction({
+    transaction: tx,
+    include: { commandResults: true },
+  });
+
+  if (simResult.$kind === "FailedTransaction") {
+    throw new Error(`managerState query failed: ${JSON.stringify(simResult.FailedTransaction)}`);
+  }
+
+  const returnValues = (simResult as any).commandResults?.[0]?.returnValues;
+  if (!returnValues || returnValues.length < 7) {
+    throw new Error(`Unexpected returnValues length: ${returnValues?.length}`);
+  }
+
+  const baseAssetRaw = Number(decodeBcsU64(returnValues[3].bcs));
+  const quoteAssetRaw = Number(decodeBcsU64(returnValues[4].bcs));
+  const baseDebtRaw = Number(decodeBcsU64(returnValues[5].bcs));
+  const quoteDebtRaw = Number(decodeBcsU64(returnValues[6].bcs));
+
+  return {
+    baseAsset: baseAssetRaw / baseScalar,
+    quoteAsset: quoteAssetRaw / quoteScalar,
+    baseDebt: baseDebtRaw / baseScalar,
+    quoteDebt: quoteDebtRaw / quoteScalar,
+  };
 }

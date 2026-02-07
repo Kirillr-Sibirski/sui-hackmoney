@@ -21,7 +21,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Sparkles, Loader2, Info, ExternalLink } from "lucide-react";
+import { Sparkles, Loader2, Info, ExternalLink, AlertTriangle } from "lucide-react";
 import pools from "@/config/pools.json";
 import coins from "@/config/coins.json";
 import marginPoolsData from "@/config/margin_pools.json";
@@ -35,15 +35,9 @@ import {
   getRiskColor,
 } from "@/lib/risk";
 import { usePrices } from "@/hooks/use-prices";
+import { addPosition } from "@/lib/positions";
 
 const coinSymbols = Object.keys(coins.coins) as Array<keyof typeof coins.coins>;
-// Mock interest rate (annualized, per pool)
-const mockInterestRates: Record<string, number> = {
-  SUI_USDC: 0.085,
-  DEEP_SUI: 0.12,
-  DEEP_USDC: 0.11,
-  WAL_USDC: 0.1,
-};
 
 /**
  * Inner component loaded dynamically — has access to dapp-kit hooks.
@@ -52,7 +46,8 @@ const TradeCardInner = dynamic(
   () =>
     import("@mysten/dapp-kit-react").then((dappKit) =>
       import("@mysten/deepbook-v3").then((deepbookMod) =>
-        import("@/lib/deepbook/transactions").then((txMod) => {
+        import("@/lib/deepbook/transactions").then((txMod) =>
+          import("@/hooks/use-interest-rates").then((irMod) => {
           const { useCurrentAccount, useCurrentClient, useDAppKit } = dappKit;
           const { DeepBookClient } = deepbookMod;
           const {
@@ -61,7 +56,11 @@ const TradeCardInner = dynamic(
             extractMarginManagerAddress,
             createClientWithManagers,
             formatTxError,
+            queryMarginPoolState,
+            buildSupplyToPoolTx,
           } = txMod;
+          type PoolState = Awaited<ReturnType<typeof queryMarginPoolState>>;
+          const { useInterestRates } = irMod;
 
           // MarginManager map: managerKey → { address, poolKey }
           type ManagerEntry = { address: string; poolKey: string };
@@ -84,7 +83,25 @@ const TradeCardInner = dynamic(
             const [txStage, setTxStage] = useState<{ step: number; total: number; label: string } | null>(null);
             const [txStatus, setTxStatus] = useState<string | null>(null);
 
+            // Supply popup state — shown when margin pool has insufficient liquidity
+            const [supplyPopup, setSupplyPopup] = useState<{
+              poolState: PoolState;
+              borrowNeeded: number;
+              shortfall: number;
+              // Context to resume TX2 after supply
+              pendingTx2: {
+                clientWithManagers: any;
+                managerKey: string;
+                borrowAmount: number;
+                orderQuantity: number;
+                payWithDeep: boolean;
+              };
+            } | null>(null);
+            const [supplyAmount, setSupplyAmount] = useState("");
+            const [isSupplying, setIsSupplying] = useState(false);
+
             const { getUsdPrice, getPairPrice } = usePrices();
+            const { rates: interestRates } = useInterestRates(suiClient, account?.address);
 
             const pool = pools.pools.find((p) => p.id === selectedPool) || pools.pools[0];
             const baseAsset = pool.baseAsset;
@@ -92,10 +109,41 @@ const TradeCardInner = dynamic(
             const basePrice = getUsdPrice(baseAsset);
             const quotePrice = getUsdPrice(quoteAsset);
             const pairPrice = getPairPrice(baseAsset, quoteAsset);
-            const interestRate = mockInterestRates[selectedPool] ?? 0.1;
+            // Interest rate for the borrowed asset (long → borrow quote, short → borrow base)
+            const borrowedAssetForRate = side === "long" ? quoteAsset : baseAsset;
+            const interestRate = interestRates[borrowedAssetForRate] ?? 0;
             const maxLeverage = getMaxLeverage(selectedPool);
 
             // Each position is fully isolated — new manager per trade
+
+            // Wallet balance for the selected collateral asset
+            const [walletBalance, setWalletBalance] = useState<number | null>(null);
+            const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
+
+            useEffect(() => {
+              if (!account?.address || !suiClient) {
+                setWalletBalance(null);
+                return;
+              }
+              const coinConfig = (coins.coins as Record<string, { type: string; decimals: number }>)[collateral];
+              if (!coinConfig) {
+                setWalletBalance(null);
+                return;
+              }
+              let cancelled = false;
+              suiClient.core
+                .getBalance({ owner: account.address, coinType: coinConfig.type })
+                .then((res: any) => {
+                  if (!cancelled) {
+                    const raw = BigInt(res.balance?.balance ?? res.balance?.coinBalance ?? "0");
+                    setWalletBalance(Number(raw) / Math.pow(10, coinConfig.decimals));
+                  }
+                })
+                .catch(() => {
+                  if (!cancelled) setWalletBalance(null);
+                });
+              return () => { cancelled = true; };
+            }, [account?.address, suiClient, collateral, balanceRefreshKey]);
 
             // Base client (no managers) for creating new managers
             const baseClient = useMemo(() => {
@@ -159,6 +207,32 @@ const TradeCardInner = dynamic(
               setTxStatus(null);
 
               try {
+                // === Step 0: Log pool diagnostics ===
+                const borrowedAssetKey = side === "long" ? quoteAsset : baseAsset;
+                try {
+                  const poolDiag = await queryMarginPoolState(
+                    baseClient, suiClient, account.address, borrowedAssetKey
+                  );
+                  const utilization = poolDiag.totalSupply > 0
+                    ? (poolDiag.totalBorrow / poolDiag.totalSupply * 100).toFixed(2)
+                    : "N/A";
+                  console.log(
+                    `%c[Pool Diagnostics] ${borrowedAssetKey} Margin Pool`,
+                    "color: cyan; font-weight: bold",
+                  );
+                  console.table({
+                    "Total Supply": poolDiag.totalSupply,
+                    "Total Borrowed": poolDiag.totalBorrow,
+                    "Max Utilization Rate": `${(poolDiag.maxUtilizationRate * 100).toFixed(1)}%`,
+                    "Current Utilization": `${utilization}%`,
+                    "Available to Borrow": Math.max(0, poolDiag.available),
+                    "You Want to Borrow": borrowAmount,
+                    "Can Borrow?": poolDiag.available >= borrowAmount ? "YES" : "NO — need to supply",
+                  });
+                } catch (diagErr) {
+                  console.warn("[Pool Diagnostics] Failed:", diagErr);
+                }
+
                 // Each trade creates a new isolated margin manager
                 const managerKey = `${selectedPool}_${Date.now()}`;
 
@@ -195,14 +269,71 @@ const TradeCardInner = dynamic(
                 };
                 setMarginManagers(newManagers);
 
-                // === TX2: Borrow + market order ===
-                setTxStage({ step: 2, total: 2, label: "Opening position" });
+                // Persist to localStorage so the dashboard can find it
+                addPosition({
+                  managerAddress,
+                  poolKey: selectedPool,
+                  side,
+                  collateralAsset: collateral,
+                  createdAt: Date.now(),
+                });
+
+                // === Check pool liquidity before TX2 ===
+                setTxStage({ step: 2, total: 3, label: "Checking pool liquidity" });
 
                 const clientWithManagers = createClientWithManagers(
                   suiClient,
                   account.address,
                   newManagers
                 );
+
+                const borrowedAsset = side === "long" ? quoteAsset : baseAsset;
+
+                if (borrowAmount > 0) {
+                  try {
+                    const poolState = await queryMarginPoolState(
+                      baseClient,
+                      suiClient,
+                      account.address,
+                      borrowedAsset
+                    );
+
+                    console.log("[PoolCheck]", borrowedAsset, "pool state:", {
+                      totalSupply: poolState.totalSupply,
+                      totalBorrow: poolState.totalBorrow,
+                      maxUtil: poolState.maxUtilizationRate,
+                      available: poolState.available,
+                      borrowNeeded: borrowAmount,
+                    });
+
+                    if (poolState.available < borrowAmount) {
+                      // Pool can't support the borrow — show supply popup
+                      const shortfall = borrowAmount - Math.max(0, poolState.available);
+                      setTxStage(null);
+                      setIsSubmitting(false);
+                      setSupplyPopup({
+                        poolState,
+                        borrowNeeded: borrowAmount,
+                        shortfall,
+                        pendingTx2: {
+                          clientWithManagers,
+                          managerKey,
+                          borrowAmount,
+                          orderQuantity,
+                          payWithDeep,
+                        },
+                      });
+                      setSupplyAmount(Math.ceil(shortfall * 1.05).toString()); // 5% buffer
+                      return; // Pause — user needs to supply first
+                    }
+                  } catch (poolCheckErr) {
+                    // Non-fatal: log and proceed with the borrow attempt
+                    console.warn("[PoolCheck] Failed to query pool state, proceeding anyway:", poolCheckErr);
+                  }
+                }
+
+                // === TX2: Borrow + market order ===
+                setTxStage({ step: 3, total: 3, label: "Opening position" });
 
                 const orderTx = buildBorrowAndOrderTx(
                   clientWithManagers,
@@ -239,6 +370,7 @@ const TradeCardInner = dynamic(
                 setTxStatus("Position opened successfully!");
                 setAmount("");
                 setCollateralAmount("");
+                setBalanceRefreshKey((k) => k + 1);
               } catch (err: any) {
                 console.error("Transaction failed:", err);
                 setTxStage(null);
@@ -265,9 +397,66 @@ const TradeCardInner = dynamic(
               dAppKitInstance,
             ]);
 
+            /** Supply liquidity to the margin pool, then resume TX2. */
+            const handleSupplyAndResume = useCallback(async () => {
+              if (!baseClient || !account || !suiClient || !supplyPopup) return;
+
+              const supplyNum = parseFloat(supplyAmount) || 0;
+              if (supplyNum <= 0) return;
+
+              setIsSupplying(true);
+              try {
+                // Supply to the margin pool
+                const supplyTx = buildSupplyToPoolTx(
+                  baseClient,
+                  supplyPopup.poolState.coinKey,
+                  supplyNum
+                );
+
+                await dAppKitInstance.signAndExecuteTransaction({
+                  transaction: supplyTx,
+                });
+
+                // Now resume TX2 with the pending context
+                const { clientWithManagers, managerKey, borrowAmount, orderQuantity, payWithDeep } = supplyPopup.pendingTx2;
+
+                setSupplyPopup(null);
+                setIsSubmitting(true);
+                setTxStage({ step: 3, total: 3, label: "Opening position" });
+
+                const orderTx = buildBorrowAndOrderTx(
+                  clientWithManagers,
+                  managerKey,
+                  selectedPool,
+                  side,
+                  borrowAmount,
+                  orderQuantity,
+                  payWithDeep
+                );
+
+                await dAppKitInstance.signAndExecuteTransaction({
+                  transaction: orderTx,
+                });
+
+                setTxStage(null);
+                setTxStatus("Position opened successfully!");
+                setAmount("");
+                setCollateralAmount("");
+                setBalanceRefreshKey((k) => k + 1);
+              } catch (err: any) {
+                console.error("Supply/resume failed:", err);
+                setTxStatus(formatTxError(err));
+                setTxStage(null);
+              } finally {
+                setIsSupplying(false);
+                setIsSubmitting(false);
+              }
+            }, [baseClient, account, suiClient, supplyPopup, supplyAmount, selectedPool, side, dAppKitInstance]);
+
             const amountNum = parseFloat(amount) || 0;
             const collateralNum = parseFloat(collateralAmount) || 0;
             const leverageNum = leverage[0];
+            const insufficientBalance = walletBalance !== null && collateralNum > 0 && collateralNum > walletBalance;
 
             const collateralOptions = useMemo(() => {
               const seen = new Set<string>();
@@ -452,15 +641,36 @@ const TradeCardInner = dynamic(
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <Label>Collateral</Label>
-                      {isDeepSelected && (
-                        <span className="flex items-center gap-1 text-xs text-primary">
-                          <Sparkles className="w-3 h-3" />
-                          Cheaper fees
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {isDeepSelected && (
+                          <span className="flex items-center gap-1 text-xs text-primary">
+                            <Sparkles className="w-3 h-3" />
+                            Cheaper fees
+                          </span>
+                        )}
+                        {walletBalance !== null && (
+                          <button
+                            type="button"
+                            onClick={() => setCollateralAmount(
+                              walletBalance < 0.01
+                                ? walletBalance.toPrecision(3)
+                                : walletBalance.toFixed(4)
+                            )}
+                            className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                          >
+                            Bal: <span className="font-mono">{
+                              walletBalance < 0.01
+                                ? walletBalance.toPrecision(3)
+                                : walletBalance < 1
+                                  ? walletBalance.toFixed(4)
+                                  : walletBalance.toFixed(2)
+                            }</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className={`flex items-center rounded-md border bg-transparent shadow-xs transition-[color,box-shadow] ${
-                      isBelowMin
+                      isBelowMin || insufficientBalance
                         ? "border-rose-500/50 focus-within:border-rose-500 focus-within:ring-[3px] focus-within:ring-rose-500/20"
                         : "border-input focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50"
                     }`}>
@@ -506,6 +716,17 @@ const TradeCardInner = dynamic(
                     {isBelowMinBorrow && (
                       <p className="text-xs text-rose-500">
                         Min borrow is {minBorrowForAsset} {borrowedAsset}. Increase amount or leverage.
+                      </p>
+                    )}
+                    {insufficientBalance && (
+                      <p className="text-xs text-rose-500">
+                        Insufficient {collateral} balance. You have {
+                          walletBalance! < 0.01
+                            ? walletBalance!.toPrecision(3)
+                            : walletBalance! < 1
+                              ? walletBalance!.toFixed(4)
+                              : walletBalance!.toFixed(2)
+                        } {collateral}.
                       </p>
                     )}
                   </div>
@@ -604,6 +825,98 @@ const TradeCardInner = dynamic(
                     </p>
                   )}
 
+                  {/* Supply popup — shown when margin pool has insufficient liquidity */}
+                  {supplyPopup && (
+                    <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-yellow-500" />
+                        <h3 className="text-sm font-semibold text-yellow-500">
+                          Insufficient Pool Liquidity
+                        </h3>
+                      </div>
+
+                      <div className="space-y-1.5 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Pool</span>
+                          <span className="font-mono">{supplyPopup.poolState.coinKey} Margin Pool</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Total Supply</span>
+                          <span className="font-mono">{supplyPopup.poolState.totalSupply.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Total Borrowed</span>
+                          <span className="font-mono">{supplyPopup.poolState.totalBorrow.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Max Utilization</span>
+                          <span className="font-mono">{(supplyPopup.poolState.maxUtilizationRate * 100).toFixed(0)}%</span>
+                        </div>
+                        <Separator />
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Available to Borrow</span>
+                          <span className="font-mono">
+                            {Math.max(0, supplyPopup.poolState.available).toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between font-medium">
+                          <span className="text-yellow-500">You Need</span>
+                          <span className="font-mono text-yellow-500">
+                            {supplyPopup.borrowNeeded.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between font-medium">
+                          <span className="text-rose-500">Shortfall</span>
+                          <span className="font-mono text-rose-500">
+                            {supplyPopup.shortfall.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-muted-foreground">
+                        Supply {supplyPopup.poolState.coinKey} to the margin pool to add liquidity, then your position will open automatically.
+                      </p>
+
+                      <div className="space-y-2">
+                        <Label className="text-xs">Supply Amount ({supplyPopup.poolState.coinKey})</Label>
+                        <Input
+                          type="number"
+                          placeholder={supplyPopup.shortfall.toFixed(2)}
+                          value={supplyAmount}
+                          onChange={(e) => setSupplyAmount(e.target.value)}
+                          className="h-8 text-sm"
+                        />
+                      </div>
+
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                          onClick={() => setSupplyPopup(null)}
+                          disabled={isSupplying}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-black"
+                          onClick={handleSupplyAndResume}
+                          disabled={isSupplying || (parseFloat(supplyAmount) || 0) <= 0}
+                        >
+                          {isSupplying ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                              Supplying...
+                            </>
+                          ) : (
+                            `Supply & Open Position`
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Stage progress indicator */}
                   {isSubmitting && txStage && (
                     <div className="space-y-2">
@@ -625,7 +938,7 @@ const TradeCardInner = dynamic(
                   <Button
                     className="w-full"
                     onClick={handleOpenPosition}
-                    disabled={isSubmitting || !isComplete || isBelowMin || isBelowMinBorrow || !account}
+                    disabled={isSubmitting || !isComplete || isBelowMin || isBelowMinBorrow || insufficientBalance || !account}
                   >
                     {isSubmitting && txStage ? (
                       <>
@@ -634,6 +947,8 @@ const TradeCardInner = dynamic(
                       </>
                     ) : !account ? (
                       "Connect Wallet to Trade"
+                    ) : insufficientBalance ? (
+                      `Insufficient ${collateral} Balance`
                     ) : (
                       "Open Position"
                     )}
@@ -642,7 +957,7 @@ const TradeCardInner = dynamic(
               </SpotlightCard>
             );
           };
-        })
+        }))
       )
     ),
   {
