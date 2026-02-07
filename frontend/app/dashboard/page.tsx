@@ -64,7 +64,7 @@ const DashboardInner = dynamic(
 
                 {/* Stats */}
                 <SpotlightCard className="mb-8 p-6">
-                  <p className="text-sm text-muted-foreground">Total Equity</p>
+                  <p className="text-sm text-muted-foreground">Total Collateral</p>
                   <p className="text-3xl font-bold text-primary">
                     ${totalEquityUsd.toFixed(2)}
                   </p>
@@ -162,6 +162,8 @@ const DashboardInner = dynamic(
                         const equityUsd = collateralUsd - debtUsd;
                         const equityInCollateralAsset = collateralAssetPrice > 0 ? equityUsd / collateralAssetPrice : 0;
 
+                        const hasDebt = debtAmount > 0.0001;
+
                         return (
                           <div
                             key={position.managerAddress}
@@ -170,13 +172,9 @@ const DashboardInner = dynamic(
                             <div className="flex items-center justify-between mb-4">
                               <div className="flex items-center gap-3">
                                 <span
-                                  className={`px-2 py-1 rounded text-xs font-medium ${
-                                    position.side === "long"
-                                      ? "bg-emerald-500/20 text-emerald-500"
-                                      : "bg-rose-500/20 text-rose-500"
-                                  }`}
+                                  className="px-2 py-1 rounded text-xs font-medium bg-emerald-500/20 text-emerald-500"
                                 >
-                                  {position.side === "long" ? "Long" : "Short"}
+                                  Long
                                 </span>
                                 <PoolPairIcon
                                   baseSymbol={position.baseSymbol}
@@ -184,9 +182,11 @@ const DashboardInner = dynamic(
                                   size={18}
                                 />
                                 <span className="font-medium">{position.pool}</span>
-                                <span className="text-primary text-sm font-medium">
-                                  {leverage.toFixed(1)}x
-                                </span>
+                                {hasDebt && (
+                                  <span className="text-primary text-sm font-medium">
+                                    {leverage.toFixed(1)}x
+                                  </span>
+                                )}
                               </div>
                               <div className="flex items-center gap-2">
                                 <ModifyPopover
@@ -206,7 +206,7 @@ const DashboardInner = dynamic(
                               </div>
                             </div>
 
-                            <div className="grid grid-cols-3 md:grid-cols-6 gap-4 text-sm">
+                            <div className={`grid gap-4 text-sm ${hasDebt ? "grid-cols-3 md:grid-cols-6" : "grid-cols-2 md:grid-cols-3"}`}>
                               <div>
                                 <p className="text-muted-foreground">Collateral</p>
                                 <p className="font-mono font-medium flex items-center gap-1.5">
@@ -219,17 +219,19 @@ const DashboardInner = dynamic(
                                   <span className="text-muted-foreground text-xs">{collateralAssetSymbol}</span>
                                 </p>
                               </div>
-                              <div>
-                                <p className="text-muted-foreground">Debt</p>
-                                <p className="font-mono font-medium flex items-center gap-1.5">
-                                  <CoinIcon symbol={debtAsset} size={14} />
-                                  {debtAmount < 0.01
-                                    ? debtAmount.toPrecision(3)
-                                    : debtAmount < 1
-                                      ? debtAmount.toFixed(4)
-                                      : debtAmount.toFixed(2)}
-                                </p>
-                              </div>
+                              {hasDebt && (
+                                <div>
+                                  <p className="text-muted-foreground">Debt</p>
+                                  <p className="font-mono font-medium flex items-center gap-1.5">
+                                    <CoinIcon symbol={debtAsset} size={14} />
+                                    {debtAmount < 0.01
+                                      ? debtAmount.toPrecision(3)
+                                      : debtAmount < 1
+                                        ? debtAmount.toFixed(4)
+                                        : debtAmount.toFixed(2)}
+                                  </p>
+                                </div>
+                              )}
                               <div>
                                 <p className="text-muted-foreground">Current Price</p>
                                 <p className="font-mono font-medium">
@@ -238,36 +240,40 @@ const DashboardInner = dynamic(
                                     : basePrice.toFixed(4)}
                                 </p>
                               </div>
-                              <div>
-                                <p className="text-muted-foreground">Liq. Price</p>
-                                <p className="font-mono font-medium">
-                                  ${liqPrice < 0.01
-                                    ? liqPrice.toPrecision(3)
-                                    : liqPrice.toFixed(4)}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">Interest Rate</p>
-                                <p className="font-mono font-medium">
-                                  {borrowRate > 0
-                                    ? `${(borrowRate * 100).toFixed(1)}%`
-                                    : "—"}
-                                  {borrowRate > 0 && (
-                                    <span className="text-muted-foreground text-xs ml-0.5">APR</span>
-                                  )}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">Risk Ratio</p>
-                                <p
-                                  className={`font-mono font-medium ${getRiskColor(position.riskRatio)}`}
-                                >
-                                  {position.riskRatio === Infinity
-                                    ? "∞"
-                                    : position.riskRatio.toFixed(2)}{" "}
-                                  ({getRiskLabel(position.riskRatio)})
-                                </p>
-                              </div>
+                              {hasDebt && (
+                                <>
+                                  <div>
+                                    <p className="text-muted-foreground">Liq. Price</p>
+                                    <p className="font-mono font-medium">
+                                      ${liqPrice < 0.01
+                                        ? liqPrice.toPrecision(3)
+                                        : liqPrice.toFixed(4)}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">Interest Rate</p>
+                                    <p className="font-mono font-medium">
+                                      {borrowRate > 0
+                                        ? `${(borrowRate * 100).toFixed(1)}%`
+                                        : "—"}
+                                      {borrowRate > 0 && (
+                                        <span className="text-muted-foreground text-xs ml-0.5">APR</span>
+                                      )}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">Risk Ratio</p>
+                                    <p
+                                      className={`font-mono font-medium ${getRiskColor(position.riskRatio)}`}
+                                    >
+                                      {position.riskRatio === Infinity
+                                        ? "∞"
+                                        : position.riskRatio.toFixed(2)}{" "}
+                                      ({getRiskLabel(position.riskRatio)})
+                                    </p>
+                                  </div>
+                                </>
+                              )}
                             </div>
                           </div>
                         );
@@ -644,10 +650,18 @@ const ClosePopover = dynamic(
                   false
                 );
 
-                // Dry run
-                closeTx.setSender(account.address);
+                // Dry run with a separate TX copy so the original stays usable for signing
+                const dryTx = buildClosePositionTx(
+                  client,
+                  managerKey,
+                  position.poolKey,
+                  position.side,
+                  orderQuantity,
+                  false
+                );
+                dryTx.setSender(account.address);
                 const dryResult = await suiClient.core.simulateTransaction({
-                  transaction: closeTx,
+                  transaction: dryTx,
                   include: { effects: true, events: true },
                 });
                 console.log("[ClosePosition] Close dry run:", JSON.stringify(dryResult, null, 2).slice(0, 2000));
@@ -695,19 +709,8 @@ const ClosePopover = dynamic(
                   baseToWithdraw, quoteToWithdraw
                 );
 
-                withdrawTx.setSender(account.address);
-                const withdrawDry = await suiClient.core.simulateTransaction({
-                  transaction: withdrawTx,
-                  include: { effects: true },
-                });
-                console.log("[ClosePosition] Withdraw dry run:", JSON.stringify(withdrawDry, null, 2).slice(0, 1000));
-
-                if (withdrawDry.$kind === "FailedTransaction") {
-                  console.warn("[ClosePosition] Withdraw dry run failed:", withdrawDry.FailedTransaction);
-                } else {
-                  await dAppKitInstance.signAndExecuteTransaction({ transaction: withdrawTx });
-                  console.log("[ClosePosition] Withdrawal complete");
-                }
+                await dAppKitInstance.signAndExecuteTransaction({ transaction: withdrawTx });
+                console.log("[ClosePosition] Withdrawal complete");
               } else {
                 console.log("[ClosePosition] No remaining assets to withdraw");
               }

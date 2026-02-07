@@ -56,24 +56,6 @@ npx shadcn@latest add <component-name>
 Components will be added to `components/ui/` with RSC support enabled.
 
 <!-- ## Prompt Sequence
-1/ Rediect the user to the dashboard page once the position was opened successfully.
-
-
-2/ The **interest** rate is displayed as 0% APR for some reason for all the pools, look into that and fix the problem pls. Double check how you fetch the APRs. You can get the current borrow interest rate from the Margin Pool via the DeepBook Margin SDK’s read‑only functions.
-
-Using the Margin Pool SDK (TypeScript)
-The SDK exposes an interestRate read function keyed by the asset/pool:
-
-// Assume you have a configured DeepBookClient with marginPoolContract
-const coinKey = 'USDC'; // or 'SUI', 'DEEP', etc.
-
-const tx = new Transaction();
-const interestRate = tx.add(
-  client.marginPoolContract.interestRate(coinKey),
-);
-
-// Then dry-run or execute the PTB to read the value
-This interestRate(coinKey) call returns the current borrow APR for that margin pool, computed from utilization and the pool’s InterestConfig (base rate, slopes, optimal utilization, etc.).[Margin Pool SDK read-only; Interest rates]
-
+5/ Why can we not implement the closure of the position in 1 TX?
 
  -->

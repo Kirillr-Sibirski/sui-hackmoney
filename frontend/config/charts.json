@@ -1,0 +1,7 @@
+{
+  "charts": {
+    "SUI_USDC": "https://www.tradingview.com/chart/?symbol=COINBASE%3ASUIUSD",
+    "WAL_USDC": "https://www.tradingview.com/chart/?symbol=COINBASE%3ASUIUSD",
+    "DEEP_USDC": "https://www.tradingview.com/chart/?symbol=COINBASE%3ASUIUSD"
+  }
+}

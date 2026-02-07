@@ -22,8 +22,10 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Sparkles, Loader2, Info, ExternalLink, AlertTriangle } from "lucide-react";
+import { useRouter } from "next/navigation";
 import pools from "@/config/pools.json";
 import coins from "@/config/coins.json";
+import charts from "@/config/charts.json";
 import marginPoolsData from "@/config/margin_pools.json";
 
 const marginPoolsConfig = marginPoolsData.marginPools as Record<string, { minBorrow: number }>;
@@ -69,6 +71,7 @@ const TradeCardInner = dynamic(
             const account = useCurrentAccount();
             const suiClient = useCurrentClient();
             const dAppKitInstance = useDAppKit();
+            const router = useRouter();
 
             const [side, setSide] = useState<"long" | "short">("long");
             const [leverage, setLeverage] = useState([2]);
@@ -371,6 +374,7 @@ const TradeCardInner = dynamic(
                 setAmount("");
                 setCollateralAmount("");
                 setBalanceRefreshKey((k) => k + 1);
+                router.push("/dashboard");
               } catch (err: any) {
                 console.error("Transaction failed:", err);
                 setTxStage(null);
@@ -443,6 +447,7 @@ const TradeCardInner = dynamic(
                 setAmount("");
                 setCollateralAmount("");
                 setBalanceRefreshKey((k) => k + 1);
+                router.push("/dashboard");
               } catch (err: any) {
                 console.error("Supply/resume failed:", err);
                 setTxStatus(formatTxError(err));
@@ -552,7 +557,7 @@ const TradeCardInner = dynamic(
                           </span>
                         )}
                         <a
-                          href="https://dexscreener.com/sui"
+                          href={(charts.charts as Record<string, string>)[selectedPool] ?? "https://www.tradingview.com"}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"

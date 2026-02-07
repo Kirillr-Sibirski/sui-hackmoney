@@ -110,7 +110,10 @@ export function usePositions(suiClient: any, walletAddress: string | undefined) 
         setIsLoading(false);
       }
     });
-  }, [suiClient, walletAddress, refreshKey]);
+  // NOTE: suiClient intentionally NOT in deps — we use clientRef to avoid
+  // re-fetching when dapp-kit returns a new client reference after a wallet transaction.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletAddress, refreshKey]);
 
   return { positions, isLoading, refresh };
 }

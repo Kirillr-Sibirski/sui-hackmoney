@@ -5,38 +5,28 @@
 <h1 align="center">Ōshio</h1>
 
 <p align="center">
-  Decentralized margin trading on Sui, powered by DeepBook V3.
-</p>
-
-<p align="center">
   Built during the <strong>ETHGlobal HackMoney 2026</strong> hackathon.
 </p>
 
 ---
 
-## What is Ōshio?
+## Short Description
 
-Ōshio is a non-custodial margin trading platform on the [Sui](https://sui.io) blockchain. It enables users to open leveraged long and short positions on token pairs using [DeepBook V3](https://deepbook.tech) margin pools, with real-time pricing from [Pyth Network](https://pyth.network) oracles.
+Margin trading on Sui that anyone can use — open leveraged positions in a few clicks.
 
-### Key Features
+## Description
 
-- **Leveraged trading** — Up to 5x leverage on supported pairs (SUI/DBUSDC, DEEP/SUI, DEEP/DBUSDC)
-- **Real-time oracle prices** — Live price feeds via Pyth Network Hermes SSE streaming
-- **Risk management** — Real-time risk ratio, liquidation price, and exposure calculations
-- **Collateral flexibility** — Use the pool's base asset, quote asset, or DEEP (with reduced fees)
-- **Position management** — Modify collateral (add/withdraw) on open positions with projected risk ratio preview
-- **Margin pool managers** — Automatic per-pool margin manager creation on first trade
+Ōshio is a non-custodial margin trading platform on Sui, designed to make leveraged trading as simple as a swap. Existing margin platforms overwhelm users with order books, funding rates, and dozens of parameters. Ōshio strips all of that away: pick a pair, choose your collateral, set your leverage with a slider, and trade. One screen to open a position, one dashboard to manage everything.
 
-## Tech Stack
+Under the hood, Ōshio connects directly to DeepBook V3 margin pools on Sui mainnet. Users can go long or short with up to 5x leverage on pairs like SUI/USDC, DEEP/USDC, and WAL/USDC. Live oracle prices stream in real-time from Pyth Network, and the UI shows projected risk ratios, liquidation prices, and borrowing rates before you confirm, so you always know your exposure without digging through advanced panels. Collateral can be added or withdrawn from open positions at any time, with an instant preview of how it changes your risk.
 
-| Layer | Technology |
-|-------|-----------|
-| **Framework** | Next.js 16 (App Router, React 19) |
-| **Styling** | Tailwind CSS v4, shadcn/ui |
-| **Blockchain** | Sui Network (`@mysten/sui` SDK) |
-| **DEX** | DeepBook V3 (`@mysten/deepbook-v3`) |
-| **Oracle** | Pyth Network (`@pythnetwork/hermes-client`) |
-| **Wallet** | `@mysten/dapp-kit-react` |
+## How It's Made
+
+Ōshio is a frontend-only application built with Next.js 16 and styled with Tailwind CSS v4 and shadcn/ui.
+
+The core trading engine uses the `@mysten/deepbook-v3` TypeScript SDK to construct Programmable Transaction Blocks (PTBs) for margin operations: creating margin managers, depositing collateral, borrowing, placing market orders, repaying debt, and withdrawing funds. A key architectural constraint is that creating a new margin manager and then using it (borrow + order) requires two separate transactions, the manager must become a shared on-chain object before it can be referenced, so the app shows multi-step transaction sequences transparently for the user.
+
+Price feeds come from Pyth Network's Hermes service via Server-Sent Events (SSE), giving the UI real-time streaming prices without polling. Risk calculations (risk ratio, liquidation price, max leverage) are computed locally using on-chain margin parameters queried through `simulateTransaction` calls, this lets us read contract state (pool liquidity, manager balances, interest rates) without submitting actual transactions. Wallet connection is handled by `@mysten/dapp-kit-react`.
 
 ## Getting Started
 
@@ -47,36 +37,6 @@ pnpm dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-## Project Structure
-
-```
-frontend/
-├── app/                    # Next.js App Router pages
-│   ├── page.tsx            # Trade page (main)
-│   └── dashboard/          # Position management dashboard
-├── components/
-│   ├── trading/            # TradeCard (core trading UI)
-│   ├── layout/             # Header, navigation
-│   ├── wallet/             # Wallet connection
-│   └── ui/                 # shadcn/ui + custom components
-├── config/                 # Pool configs, risk params, price feed IDs
-├── hooks/                  # usePrices (Pyth oracle hook)
-└── lib/
-    ├── oracle.ts           # Pyth Hermes client, price fetching/streaming
-    ├── risk.ts             # Risk ratio, max leverage, liquidation calculations
-    └── deepbook/           # DeepBook SDK integration
-```
-
-## Configuration
-
-All trading parameters are defined in JSON configs under `frontend/config/`:
-
-- **`pools.json`** — Trading pairs and their properties
-- **`pair_risk_params.json`** — Risk parameters per pair (minBorrowRiskRatio, liquidationRiskRatio)
-- **`margin_pools.json`** — Margin pool on-chain IDs
-- **`coins.json`** — Token metadata (addresses, decimals, icons)
-- **`price_ids.json`** — Pyth price feed IDs for oracle integration
 
 ## License
 
