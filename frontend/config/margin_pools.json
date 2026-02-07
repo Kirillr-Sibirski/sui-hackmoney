@@ -1,31 +1,31 @@
 {
   "marginPools": {
     "SUI": {
-      "id": "0xcdbbe6a72e639b647296788e2e4b1cac5cea4246028ba388ba1332ff9a382eea",
-      "supplyCap": 1000000,
-      "maxUtilizationRate": 0.9,
-      "referralSpread": 0.1,
+      "id": "0x53041c6f86c4782aabbfc1d4fe234a6d37160310c7ee740c915f0a01b7127344",
+      "supplyCap": 500000,
+      "maxUtilizationRate": 0.8,
+      "referralSpread": 0.2,
       "minBorrow": 0.1
     },
-    "DBUSDC": {
-      "id": "0xf08568da93834e1ee04f09902ac7b1e78d3fdf113ab4d2106c7265e95318b14d",
+    "USDC": {
+      "id": "0xba473d9ae278f10af75c50a8fa341e9c6a1c087dc91a3f23e8048baf67d0754f",
       "supplyCap": 1000000,
-      "maxUtilizationRate": 0.95,
-      "referralSpread": 0.1,
+      "maxUtilizationRate": 0.8,
+      "referralSpread": 0.2,
       "minBorrow": 0.1
     },
     "DEEP": {
-      "id": "0x610640613f21d9e688d6f8103d17df22315c32e0c80590ce64951a1991378b55",
-      "supplyCap": 1000000,
-      "maxUtilizationRate": 0.9,
-      "referralSpread": 0.1,
+      "id": "0x1d723c5cd113296868b55208f2ab5a905184950dd59c48eb7345607d6b5e6af7",
+      "supplyCap": 20000000,
+      "maxUtilizationRate": 0.8,
+      "referralSpread": 0.2,
       "minBorrow": 0.1
     },
-    "DBTC": {
-      "id": "0xf3440b4aafcc8b12fc4b242e9590c52873b8238a0d0e52fbf9dae61d2970796a",
-      "supplyCap": 100,
-      "maxUtilizationRate": 0.9,
-      "referralSpread": 0.1,
+    "WAL": {
+      "id": "0x38decd3dbb62bd4723144349bf57bc403b393aee86a51596846a824a1e0c2c01",
+      "supplyCap": 7000000,
+      "maxUtilizationRate": 0.8,
+      "referralSpread": 0.2,
       "minBorrow": 0.1
     }
   }

@@ -24,12 +24,14 @@ import {
 import { Sparkles, Loader2, Info, ExternalLink } from "lucide-react";
 import pools from "@/config/pools.json";
 import coins from "@/config/coins.json";
+import marginPoolsData from "@/config/margin_pools.json";
+
+const marginPoolsConfig = marginPoolsData.marginPools as Record<string, { minBorrow: number }>;
 import { CoinIcon, PoolPairIcon } from "@/components/ui/coin-icon";
 import {
   getMaxLeverage,
-  getMinCollateralUsd,
+  getMinBorrowRiskRatio,
   getLiquidationRiskRatio,
-  calculateRiskRatio,
   getRiskColor,
 } from "@/lib/risk";
 import { usePrices } from "@/hooks/use-prices";
@@ -37,9 +39,10 @@ import { usePrices } from "@/hooks/use-prices";
 const coinSymbols = Object.keys(coins.coins) as Array<keyof typeof coins.coins>;
 // Mock interest rate (annualized, per pool)
 const mockInterestRates: Record<string, number> = {
-  SUI_DBUSDC: 0.085,
+  SUI_USDC: 0.085,
   DEEP_SUI: 0.12,
-  DEEP_DBUSDC: 0.11,
+  DEEP_USDC: 0.11,
+  WAL_USDC: 0.1,
 };
 
 /**
@@ -53,10 +56,11 @@ const TradeCardInner = dynamic(
           const { useCurrentAccount, useCurrentClient, useDAppKit } = dappKit;
           const { DeepBookClient } = deepbookMod;
           const {
-            buildNewMarginManagerTx,
-            buildOpenPositionTx,
+            buildCreateManagerAndDepositTx,
+            buildBorrowAndOrderTx,
             extractMarginManagerAddress,
             createClientWithManagers,
+            formatTxError,
           } = txMod;
 
           // MarginManager map: managerKey → { address, poolKey }
@@ -71,10 +75,10 @@ const TradeCardInner = dynamic(
             const [leverage, setLeverage] = useState([2]);
             const [selectedPool, setSelectedPool] = useState(pools.pools[0].id);
             const [amount, setAmount] = useState("");
-            const [collateral, setCollateral] = useState("DBUSDC");
+            const [collateral, setCollateral] = useState("USDC");
             const [collateralAmount, setCollateralAmount] = useState("");
 
-            // Stores created margin managers: poolKey → { address, poolKey }
+            // Stores all created margin managers: unique key → { address, poolKey }
             const [marginManagers, setMarginManagers] = useState<Record<string, ManagerEntry>>({});
             const [isSubmitting, setIsSubmitting] = useState(false);
             const [txStage, setTxStage] = useState<{ step: number; total: number; label: string } | null>(null);
@@ -86,12 +90,12 @@ const TradeCardInner = dynamic(
             const baseAsset = pool.baseAsset;
             const quoteAsset = pool.quoteAsset;
             const basePrice = getUsdPrice(baseAsset);
+            const quotePrice = getUsdPrice(quoteAsset);
             const pairPrice = getPairPrice(baseAsset, quoteAsset);
             const interestRate = mockInterestRates[selectedPool] ?? 0.1;
             const maxLeverage = getMaxLeverage(selectedPool);
 
-            // Check if a margin manager exists for the current pool
-            const hasManager = !!marginManagers[selectedPool];
+            // Each position is fully isolated — new manager per trade
 
             // Base client (no managers) for creating new managers
             const baseClient = useMemo(() => {
@@ -99,7 +103,7 @@ const TradeCardInner = dynamic(
               try {
                 return new DeepBookClient({
                   client: suiClient,
-                  network: "testnet",
+                  network: "mainnet",
                   address: account.address,
                 });
               } catch {
@@ -113,101 +117,132 @@ const TradeCardInner = dynamic(
                 return;
               }
 
+              const amountNum = parseFloat(amount) || 0;
+              const collateralNum = parseFloat(collateralAmount) || 0;
+              const leverageNum = leverage[0];
+
+              const orderQuantity = amountNum * leverageNum;
+              const payWithDeep = collateral === "DEEP";
+
+              // --- All calculations in USD ---
+              const collateralAssetPrice = getUsdPrice(collateral);
+              const exposureUsd = orderQuantity * basePrice;
+              const collateralUsd = collateralNum * collateralAssetPrice;
+              const borrowUsdRaw = exposureUsd - collateralUsd;
+
+              // Convert borrow USD back to the actual borrowed asset
+              // Long → borrow quote, Short → borrow base
+              let borrowAmount: number;
+              if (borrowUsdRaw <= 0) {
+                borrowAmount = 0; // Fully collateralized, no borrow needed
+              } else if (side === "long") {
+                borrowAmount = quotePrice > 0 ? borrowUsdRaw / quotePrice : 0;
+              } else {
+                borrowAmount = basePrice > 0 ? borrowUsdRaw / basePrice : 0;
+              }
+
+              console.log("[TradeCard] Position calc (USD):", {
+                pool: selectedPool, side, leverage: leverageNum,
+                orderQuantity, exposureUsd: exposureUsd.toFixed(4),
+                collateral: `${collateralNum} ${collateral} ($${collateralUsd.toFixed(4)})`,
+                borrowUsd: borrowUsdRaw.toFixed(4),
+                borrowAmount: `${borrowAmount.toFixed(6)} ${side === "long" ? quoteAsset : baseAsset}`,
+              });
+
+              console.log("[TradeCard] Open position params:", {
+                pool: selectedPool, side, leverage: leverageNum,
+                amount: amountNum, collateral: collateralNum, collateralAsset: collateral,
+                orderQuantity, borrowAmount, pairPrice, basePrice,
+              });
+
               setIsSubmitting(true);
               setTxStatus(null);
-              const totalSteps = hasManager ? 1 : 2;
 
               try {
-                let currentManagers = { ...marginManagers };
+                // Each trade creates a new isolated margin manager
+                const managerKey = `${selectedPool}_${Date.now()}`;
 
-                // Step 1: Create margin manager if needed
-                if (!hasManager) {
-                  setTxStage({ step: 1, total: totalSteps, label: "Creating margin manager" });
-                  const createTx = buildNewMarginManagerTx(baseClient, selectedPool);
-                  const result = await dAppKitInstance.signAndExecuteTransaction({
-                    transaction: createTx,
-                  });
+                // === TX1: Create manager + deposit + share ===
+                setTxStage({ step: 1, total: 2, label: "Creating manager & depositing" });
 
-                  // Extract created MarginManager object ID from tx effects
-                  const managerAddress = extractMarginManagerAddress(result as any);
-                  if (!managerAddress) {
-                    throw new Error("Failed to extract margin manager address from transaction");
-                  }
+                const createTx = buildCreateManagerAndDepositTx(
+                  baseClient,
+                  selectedPool,
+                  collateral,
+                  collateralNum
+                );
 
-                  // Store the manager entry
-                  const managerKey = selectedPool;
-                  currentManagers = {
-                    ...currentManagers,
-                    [managerKey]: { address: managerAddress, poolKey: selectedPool },
-                  };
-                  setMarginManagers(currentManagers);
+                const signResult = await dAppKitInstance.signAndExecuteTransaction({
+                  transaction: createTx,
+                });
+
+                // Re-fetch tx with objectTypes to find the created MarginManager address
+                const digest = (signResult as any).Transaction?.digest;
+                const fullResult = await suiClient.core.getTransaction({
+                  digest,
+                  include: { effects: true, objectTypes: true },
+                });
+
+                const managerAddress = extractMarginManagerAddress(fullResult as any);
+                if (!managerAddress) {
+                  throw new Error("Failed to extract margin manager address from transaction");
                 }
+                console.log("Margin manager created:", managerKey, managerAddress);
 
-                // Step 2: Calculate debt and order quantity, build single PTB
-                const amountNum = parseFloat(amount) || 0;
-                const collateralNum = parseFloat(collateralAmount) || 0;
-                const leverageNum = leverage[0];
+                const newManagers = {
+                  ...marginManagers,
+                  [managerKey]: { address: managerAddress, poolKey: selectedPool },
+                };
+                setMarginManagers(newManagers);
 
-                const collateralUsdPrice = getUsdPrice(collateral);
-                const exposureUsd = amountNum * basePrice * leverageNum;
-                const collateralUsd = collateralNum * collateralUsdPrice;
-                const debtUsd = exposureUsd - collateralUsd;
+                // === TX2: Borrow + market order ===
+                setTxStage({ step: 2, total: 2, label: "Opening position" });
 
-                // Convert debt to the token amount of the borrowed asset
-                // Long → borrow quote, Short → borrow base
-                let borrowAmount: number;
-                if (side === "long") {
-                  const quotePrice = getUsdPrice(quoteAsset);
-                  borrowAmount = quotePrice > 0 ? debtUsd / quotePrice : 0;
-                } else {
-                  borrowAmount = basePrice > 0 ? debtUsd / basePrice : 0;
-                }
-
-                if (borrowAmount <= 0) {
-                  setTxStatus("Invalid borrow amount. Check your inputs.");
-                  setIsSubmitting(false);
-                  return;
-                }
-
-                // Order quantity = total exposure in base asset terms
-                const orderQuantity = amountNum * leverageNum;
-
-                // Recreate client with the margin managers map
-                const managerKey = selectedPool;
                 const clientWithManagers = createClientWithManagers(
                   suiClient,
                   account.address,
-                  currentManagers
+                  newManagers
                 );
 
-                setTxStage({ step: totalSteps, total: totalSteps, label: "Opening position" });
-                // Single PTB: deposit → borrow → place market order
-                const tx = buildOpenPositionTx(
+                const orderTx = buildBorrowAndOrderTx(
                   clientWithManagers,
                   managerKey,
                   selectedPool,
-                  baseAsset,
-                  quoteAsset,
-                  collateral,
-                  collateralNum,
                   side,
                   borrowAmount,
-                  orderQuantity
+                  orderQuantity,
+                  payWithDeep
                 );
 
+                // Dry run first to get detailed error
+                try {
+                  orderTx.setSender(account.address);
+                  const dryRunResult = await suiClient.core.simulateTransaction({
+                    transaction: orderTx,
+                    include: { effects: true, events: true },
+                  });
+                  console.log("[DryRun] Result:", JSON.stringify(dryRunResult, null, 2));
+                  if (dryRunResult.$kind === "FailedTransaction") {
+                    console.error("[DryRun] FAILED:", dryRunResult.FailedTransaction);
+                    throw new Error(`Dry run failed: ${JSON.stringify(dryRunResult.FailedTransaction)}`);
+                  }
+                } catch (dryErr: any) {
+                  console.error("[DryRun] Error:", dryErr);
+                  throw dryErr;
+                }
+
                 await dAppKitInstance.signAndExecuteTransaction({
-                  transaction: tx,
+                  transaction: orderTx,
                 });
 
                 setTxStage(null);
                 setTxStatus("Position opened successfully!");
-                // Reset form
                 setAmount("");
                 setCollateralAmount("");
               } catch (err: any) {
                 console.error("Transaction failed:", err);
                 setTxStage(null);
-                setTxStatus(`Error: ${err?.message || "Transaction failed"}`);
+                setTxStatus(formatTxError(err));
               } finally {
                 setIsSubmitting(false);
               }
@@ -215,7 +250,6 @@ const TradeCardInner = dynamic(
               baseClient,
               account,
               suiClient,
-              hasManager,
               marginManagers,
               selectedPool,
               side,
@@ -226,6 +260,7 @@ const TradeCardInner = dynamic(
               baseAsset,
               quoteAsset,
               basePrice,
+              quotePrice,
               getUsdPrice,
               dAppKitInstance,
             ]);
@@ -259,12 +294,25 @@ const TradeCardInner = dynamic(
 
             const isDeepSelected = collateral === "DEEP";
 
-            // Calculate min collateral dynamically
+            // --- All display calculations in USD ---
             const collateralPrice = getUsdPrice(collateral);
-            const exposureUsd = amountNum * basePrice * leverageNum;
-            const minCollateralUsd = amountNum > 0 ? getMinCollateralUsd(exposureUsd, selectedPool) : 0;
+            const displayExposureUsd = amountNum * basePrice * leverageNum;
+            const displayCollateralUsd = collateralNum * collateralPrice;
+            const displayBorrowUsd = Math.max(0, displayExposureUsd - displayCollateralUsd);
+
+            // Min collateral: risk = E / (E - C) >= R → C >= E * (1 - 1/R)
+            // Only depends on exposure, so it stays stable as user types collateral
+            const minBorrowRatio = getMinBorrowRiskRatio(selectedPool);
+            const minCollateralUsd = displayExposureUsd * (1 - 1 / minBorrowRatio);
             const minCollateralAmount = collateralPrice > 0 ? minCollateralUsd / collateralPrice : 0;
             const isBelowMin = collateralNum > 0 && collateralNum < minCollateralAmount;
+
+            // Min borrow check: the borrowed asset's margin pool has a minBorrow
+            const borrowedAsset = side === "long" ? quoteAsset : baseAsset;
+            const borrowedAssetPrice = getUsdPrice(borrowedAsset);
+            const minBorrowForAsset = marginPoolsConfig[borrowedAsset]?.minBorrow ?? 0;
+            const estimatedBorrowAmount = borrowedAssetPrice > 0 ? displayBorrowUsd / borrowedAssetPrice : 0;
+            const isBelowMinBorrow = displayBorrowUsd > 0 && estimatedBorrowAmount < minBorrowForAsset;
 
             const isComplete = amountNum > 0 && collateralNum > 0;
             const liqRiskRatio = getLiquidationRiskRatio(selectedPool);
@@ -272,22 +320,27 @@ const TradeCardInner = dynamic(
             const calculations = useMemo(() => {
               if (!isComplete) return null;
 
-              const collateralUsd = collateralNum * collateralPrice;
-              const debtUsd = exposureUsd - collateralUsd;
-              const riskRatio = calculateRiskRatio(exposureUsd, debtUsd);
+              // On-chain risk ratio = (collateral + borrow) / borrow
+              const riskRatio = displayBorrowUsd > 0
+                ? (displayCollateralUsd + displayBorrowUsd) / displayBorrowUsd
+                : Infinity;
 
-              const liqFactor = debtUsd > 0 ? (liqRiskRatio * debtUsd) / exposureUsd : 0;
+              const exposure = amountNum * leverageNum;
+              const exposureUsd = displayExposureUsd;
+
+              const liqFactor = displayBorrowUsd > 0
+                ? (liqRiskRatio * displayBorrowUsd) / (displayCollateralUsd + displayBorrowUsd)
+                : 0;
               const liqPrice =
                 side === "long"
                   ? basePrice * liqFactor
                   : basePrice * (2 - liqFactor);
 
-              const exposure = amountNum * leverageNum;
               const pnlUp = exposure * basePrice * 0.1;
               const pnlDown = exposure * basePrice * 0.1;
 
               return { exposureUsd, liqPrice, exposure, riskRatio, pnlUp, pnlDown };
-            }, [isComplete, amountNum, collateralNum, collateralPrice, exposureUsd, leverageNum, side, basePrice, liqRiskRatio]);
+            }, [isComplete, amountNum, displayExposureUsd, displayCollateralUsd, displayBorrowUsd, leverageNum, side, basePrice, liqRiskRatio]);
 
             return (
               <SpotlightCard className="w-full max-w-lg">
@@ -450,6 +503,11 @@ const TradeCardInner = dynamic(
                         </button>
                       </div>
                     )}
+                    {isBelowMinBorrow && (
+                      <p className="text-xs text-rose-500">
+                        Min borrow is {minBorrowForAsset} {borrowedAsset}. Increase amount or leverage.
+                      </p>
+                    )}
                   </div>
 
                   {/* Position Info — only when all fields are filled */}
@@ -467,7 +525,9 @@ const TradeCardInner = dynamic(
                         <div className="flex justify-between text-sm">
                           <span className="text-muted-foreground">Liquidation Price</span>
                           <span className="font-mono">
-                            ${calculations.liqPrice.toFixed(4)}
+                            ${calculations.liqPrice < 0.01
+                              ? calculations.liqPrice.toPrecision(3)
+                              : calculations.liqPrice.toFixed(4)}
                           </span>
                         </div>
 
@@ -521,7 +581,11 @@ const TradeCardInner = dynamic(
                             </Popover>
                           </span>
                           <span className="font-mono">
-                            {calculations.exposure.toFixed(2)} {baseAsset}
+                            {calculations.exposure < 0.01
+                              ? calculations.exposure.toPrecision(3)
+                              : calculations.exposure < 1
+                                ? calculations.exposure.toFixed(4)
+                                : calculations.exposure.toFixed(2)} {baseAsset}
                           </span>
                         </div>
                       </div>
@@ -532,6 +596,7 @@ const TradeCardInner = dynamic(
                   {txStatus && !isSubmitting && (
                     <p className={`text-xs text-center ${
                       txStatus.startsWith("Error") ? "text-rose-500" :
+                      txStatus === "Transaction cancelled" ? "text-muted-foreground" :
                       txStatus.includes("successfully") ? "text-emerald-500" :
                       "text-muted-foreground"
                     }`}>
@@ -560,7 +625,7 @@ const TradeCardInner = dynamic(
                   <Button
                     className="w-full"
                     onClick={handleOpenPosition}
-                    disabled={isSubmitting || !isComplete || isBelowMin || !account}
+                    disabled={isSubmitting || !isComplete || isBelowMin || isBelowMinBorrow || !account}
                   >
                     {isSubmitting && txStage ? (
                       <>
@@ -569,10 +634,8 @@ const TradeCardInner = dynamic(
                       </>
                     ) : !account ? (
                       "Connect Wallet to Trade"
-                    ) : hasManager ? (
-                      "Open Position"
                     ) : (
-                      "Set Up & Open Position"
+                      "Open Position"
                     )}
                   </Button>
                 </div>

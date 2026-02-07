@@ -85,7 +85,7 @@ const ConnectWalletButtonClient = dynamic(
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Network</span>
-                    <span className="text-sm font-medium text-primary">Testnet</span>
+                    <span className="text-sm font-medium text-primary">Mainnet</span>
                   </div>
                 </div>
 
@@ -99,7 +99,7 @@ const ConnectWalletButtonClient = dynamic(
                     asChild
                   >
                     <a
-                      href={`https://suiscan.xyz/testnet/account/${account.address}`}
+                      href={`https://suiscan.xyz/mainnet/account/${account.address}`}
                       target="_blank"
                       rel="noopener noreferrer"
                     >

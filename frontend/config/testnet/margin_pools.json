@@ -1,0 +1,32 @@
+{
+  "marginPools": {
+    "SUI": {
+      "id": "0xcdbbe6a72e639b647296788e2e4b1cac5cea4246028ba388ba1332ff9a382eea",
+      "supplyCap": 1000000,
+      "maxUtilizationRate": 0.9,
+      "referralSpread": 0.1,
+      "minBorrow": 0.1
+    },
+    "DBUSDC": {
+      "id": "0xf08568da93834e1ee04f09902ac7b1e78d3fdf113ab4d2106c7265e95318b14d",
+      "supplyCap": 1000000,
+      "maxUtilizationRate": 0.95,
+      "referralSpread": 0.1,
+      "minBorrow": 0.1
+    },
+    "DEEP": {
+      "id": "0x610640613f21d9e688d6f8103d17df22315c32e0c80590ce64951a1991378b55",
+      "supplyCap": 1000000,
+      "maxUtilizationRate": 0.9,
+      "referralSpread": 0.1,
+      "minBorrow": 0.1
+    },
+    "DBTC": {
+      "id": "0xf3440b4aafcc8b12fc4b242e9590c52873b8238a0d0e52fbf9dae61d2970796a",
+      "supplyCap": 100,
+      "maxUtilizationRate": 0.9,
+      "referralSpread": 0.1,
+      "minBorrow": 0.1
+    }
+  }
+}

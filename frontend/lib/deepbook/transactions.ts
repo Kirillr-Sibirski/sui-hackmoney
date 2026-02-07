@@ -2,30 +2,21 @@
  * DeepBook Margin Transaction Builders
  *
  * Uses the @mysten/deepbook-v3 SDK to build real margin transactions.
- * All steps can be combined into a single Programmable Transaction Block (PTB).
+ * Steps can be combined into Programmable Transaction Blocks (PTBs) where possible.
  */
 
 import { Transaction } from "@mysten/sui/transactions";
 import { DeepBookClient } from "@mysten/deepbook-v3";
 import type { MarginManager } from "@mysten/deepbook-v3";
 
-/**
- * Build a transaction to create a new margin manager for a pool.
- * The manager must exist before deposits/borrows/orders can be made.
- */
-export function buildNewMarginManagerTx(
-  client: DeepBookClient,
-  poolKey: string
-): Transaction {
-  const tx = new Transaction();
-  client.marginManager.newMarginManager(poolKey)(tx);
-  return tx;
+/** Generate a unique client order ID */
+function generateClientOrderId(): string {
+  return Date.now().toString() + Math.floor(Math.random() * 1000).toString();
 }
 
 /**
  * Extract the MarginManager object ID from a transaction result.
- * After executing newMarginManager, the created shared object ID is found
- * in the transaction effects' changedObjects.
+ * Requires `include: { effects: true, objectTypes: true }` when fetching.
  */
 export function extractMarginManagerAddress(
   result: {
@@ -67,55 +58,95 @@ export function createClientWithManagers(
 ): DeepBookClient {
   return new DeepBookClient({
     client: suiClient,
-    network: "testnet",
+    network: "mainnet",
     address,
     marginManagers,
   });
 }
 
 /**
- * Determine which deposit function to use based on collateral asset
- * relative to the pool's base/quote assets.
+ * Build a single PTB that creates a margin manager, deposits collateral,
+ * and shares the manager — all in one transaction.
+ *
+ * Uses the initializer pattern:
+ *   1. newMarginManagerWithInitializer → { manager, initializer }
+ *   2. depositDuringInitialization (deposit before sharing)
+ *   3. shareMarginManager (makes it a shared on-chain object)
+ *
+ * Borrow + market order must happen in a separate TX after this,
+ * because they require the shared object address.
  */
-function getDepositFn(
+export function buildCreateManagerAndDepositTx(
   client: DeepBookClient,
+  poolKey: string,
   collateralSymbol: string,
-  baseAsset: string,
-  _quoteAsset: string
-) {
-  if (collateralSymbol === "DEEP") {
-    return client.marginManager.depositDeep.bind(client.marginManager);
-  }
-  if (collateralSymbol === baseAsset) {
-    return client.marginManager.depositBase.bind(client.marginManager);
-  }
-  // quoteAsset or any other — depositQuote
-  return client.marginManager.depositQuote.bind(client.marginManager);
-}
+  collateralAmount: number
+): Transaction {
+  const tx = new Transaction();
 
-/** Generate a unique client order ID */
-function generateClientOrderId(): string {
-  return Date.now().toString() + Math.floor(Math.random() * 1000).toString();
+  // Step 1: Create manager with initializer
+  const { manager, initializer } =
+    client.marginManager.newMarginManagerWithInitializer(poolKey)(tx);
+
+  // Step 2: Deposit collateral during initialization (before sharing)
+  client.marginManager.depositDuringInitialization({
+    manager,
+    poolKey,
+    coinType: collateralSymbol,
+    amount: collateralAmount,
+  })(tx);
+
+  // Step 3: Share the manager so it becomes a shared object
+  client.marginManager.shareMarginManager(poolKey, manager, initializer)(tx);
+
+  return tx;
 }
 
 /**
- * Build a single PTB that deposits collateral, borrows, and places a market order.
+ * Build a PTB that (optionally) borrows and places a market order.
+ * The margin manager must already exist and be shared.
  *
- * Steps in one transaction:
- *   1. Deposit collateral (depositBase/Quote/Deep)
- *   2. Borrow debt (borrowBase/Quote)
- *   3. Place market order via poolProxy (placeMarketOrder)
- *
- * @param client           - DeepBookClient with marginManagers configured
- * @param managerKey       - The margin manager key (maps to { address, poolKey })
- * @param poolKey          - The pool key (e.g. "SUI_DBUSDC")
- * @param baseAsset        - Base asset symbol (e.g. "SUI")
- * @param quoteAsset       - Quote asset symbol (e.g. "DBUSDC")
- * @param collateralSymbol - Which asset the user deposits as collateral
- * @param collateralAmount - Human-readable collateral amount
- * @param side             - "long" or "short"
- * @param borrowAmount     - Human-readable borrow amount (in borrowed asset)
- * @param orderQuantity    - Market order quantity in base asset (= amount * leverage)
+ * If borrowAmount <= 0, the borrow step is skipped (fully collateralized).
+ */
+export function buildBorrowAndOrderTx(
+  client: DeepBookClient,
+  managerKey: string,
+  poolKey: string,
+  side: "long" | "short",
+  borrowAmount: number,
+  orderQuantity: number,
+  payWithDeep: boolean
+): Transaction {
+  const tx = new Transaction();
+
+  // Step 1: Borrow (skip if fully collateralized)
+  console.log("borrowing the asset... the manager key is", managerKey)
+  if (borrowAmount > 0) {
+    if (side === "long") {
+      client.marginManager.borrowQuote(managerKey, borrowAmount)(tx);
+    } else {
+      client.marginManager.borrowBase(managerKey, borrowAmount)(tx);
+    }
+  }
+  console.log("asset borrowed")
+
+  // Step 2: Place market order
+  client.poolProxy.placeMarketOrder({
+    poolKey,
+    marginManagerKey: managerKey,
+    clientOrderId: generateClientOrderId(),
+    quantity: orderQuantity,
+    isBid: side === "long",
+    payWithDeep,
+  })(tx);
+  console.log("placed market order", tx)
+
+  return tx;
+}
+
+/**
+ * Build a single PTB for returning users (manager already exists):
+ * deposit + borrow + market order.
  */
 export function buildOpenPositionTx(
   client: DeepBookClient,
@@ -135,17 +166,16 @@ export function buildOpenPositionTx(
   const depositFn = getDepositFn(client, collateralSymbol, baseAsset, quoteAsset);
   depositFn({ managerKey, amount: collateralAmount })(tx);
 
-  // Step 2: Borrow — direction determines which asset to borrow
-  // Long: borrow quote (to buy more base)
-  // Short: borrow base (to sell for quote)
-  if (side === "long") {
-    client.marginManager.borrowQuote(managerKey, borrowAmount)(tx);
-  } else {
-    client.marginManager.borrowBase(managerKey, borrowAmount)(tx);
+  // Step 2: Borrow (skip if fully collateralized)
+  if (borrowAmount > 0) {
+    if (side === "long") {
+      client.marginManager.borrowQuote(managerKey, borrowAmount)(tx);
+    } else {
+      client.marginManager.borrowBase(managerKey, borrowAmount)(tx);
+    }
   }
 
   // Step 3: Place market order
-  // isBid = true for long (buying base), false for short (selling base)
   client.poolProxy.placeMarketOrder({
     poolKey,
     marginManagerKey: managerKey,
@@ -156,6 +186,25 @@ export function buildOpenPositionTx(
   })(tx);
 
   return tx;
+}
+
+/**
+ * Determine which deposit function to use based on collateral asset
+ * relative to the pool's base/quote assets.
+ */
+function getDepositFn(
+  client: DeepBookClient,
+  collateralSymbol: string,
+  baseAsset: string,
+  _quoteAsset: string
+) {
+  if (collateralSymbol === "DEEP") {
+    return client.marginManager.depositDeep.bind(client.marginManager);
+  }
+  if (collateralSymbol === baseAsset) {
+    return client.marginManager.depositBase.bind(client.marginManager);
+  }
+  return client.marginManager.depositQuote.bind(client.marginManager);
 }
 
 /**
@@ -210,7 +259,6 @@ export function buildRepayTx(
 ): Transaction {
   const tx = new Transaction();
 
-  // Repay the asset that was borrowed
   if (side === "long") {
     client.marginManager.repayQuote(managerKey, amount)(tx);
   } else {
@@ -218,4 +266,101 @@ export function buildRepayTx(
   }
 
   return tx;
+}
+
+/**
+ * Build a PTB to close a position: reduce-only order → settle → repay debt.
+ *
+ * Steps:
+ *   1. placeReduceOnlyMarketOrder (sell for long, buy for short)
+ *   2. withdrawSettledAmounts (pull settled proceeds into manager)
+ *   3. repayQuote (long) / repayBase (short) — repay all debt
+ *
+ * Withdraw of remaining collateral is done in a separate tx because
+ * the exact remaining balance isn't known until this tx completes.
+ */
+export function buildClosePositionTx(
+  client: DeepBookClient,
+  managerKey: string,
+  poolKey: string,
+  side: "long" | "short",
+  orderQuantity: number,
+  payWithDeep: boolean
+): Transaction {
+  const tx = new Transaction();
+
+  // Step 1: Place reduce-only market order to close the position
+  // Long → sell base (isBid=false), Short → buy base (isBid=true)
+  client.poolProxy.placeReduceOnlyMarketOrder({
+    poolKey,
+    marginManagerKey: managerKey,
+    clientOrderId: generateClientOrderId(),
+    quantity: orderQuantity,
+    isBid: side !== "long",
+    payWithDeep,
+  })(tx);
+
+  // Step 2: Pull settled amounts into the margin manager
+  client.poolProxy.withdrawSettledAmounts(managerKey)(tx);
+
+  // Step 3: Repay all debt
+  if (side === "long") {
+    client.marginManager.repayQuote(managerKey)(tx);
+  } else {
+    client.marginManager.repayBase(managerKey)(tx);
+  }
+
+  return tx;
+}
+
+/**
+ * Build a transaction to withdraw all remaining collateral after closing.
+ */
+export function buildWithdrawAllCollateralTx(
+  client: DeepBookClient,
+  managerKey: string,
+  baseAsset: string,
+  collateralSymbol: string,
+  amount: number
+): Transaction {
+  const tx = new Transaction();
+
+  if (collateralSymbol === "DEEP") {
+    client.marginManager.withdrawDeep(managerKey, amount)(tx);
+  } else if (collateralSymbol === baseAsset) {
+    client.marginManager.withdrawBase(managerKey, amount)(tx);
+  } else {
+    client.marginManager.withdrawQuote(managerKey, amount)(tx);
+  }
+
+  return tx;
+}
+
+/**
+ * Check if an error is a user wallet rejection.
+ */
+export function isUserRejection(err: unknown): boolean {
+  if (!err) return false;
+  const msg = (err as any)?.message?.toLowerCase?.() ?? "";
+  return (
+    msg.includes("rejected") ||
+    msg.includes("user denied") ||
+    msg.includes("user cancelled") ||
+    msg.includes("user canceled") ||
+    msg.includes("declined")
+  );
+}
+
+/**
+ * Format a transaction error for display.
+ */
+export function formatTxError(err: unknown): string {
+  if (isUserRejection(err)) {
+    return "Transaction cancelled";
+  }
+  const msg = (err as any)?.message ?? "Transaction failed";
+  if (msg.length > 120) {
+    return `Error: ${msg.slice(0, 117)}...`;
+  }
+  return `Error: ${msg}`;
 }

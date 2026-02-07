@@ -14,7 +14,7 @@ const DAppKitProviderClient = dynamic(
 
         // Create dAppKit instance
         const dAppKit = createDAppKit({
-          networks: ["testnet"] as const,
+          networks: ["mainnet"] as const,
           createClient: (network) =>
             new SuiGrpcClient({
               network,

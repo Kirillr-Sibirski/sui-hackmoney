@@ -1,29 +1,29 @@
 {
   "pools": [
     {
-      "id": "SUI_DBUSDC",
-      "name": "SUI / DBUSDC",
+      "id": "SUI_USDC",
+      "name": "SUI / USDC",
       "baseAsset": "SUI",
-      "quoteAsset": "DBUSDC",
+      "quoteAsset": "USDC",
       "maxLeverage": 5,
       "minOrderSize": 1,
       "tickSize": 0.0001
     },
     {
-      "id": "DEEP_SUI",
-      "name": "DEEP / SUI",
-      "baseAsset": "DEEP",
-      "quoteAsset": "SUI",
-      "maxLeverage": 5,
-      "minOrderSize": 100,
-      "tickSize": 0.000001
+      "id": "WAL_USDC",
+      "name": "WAL / USDC",
+      "baseAsset": "WAL",
+      "quoteAsset": "USDC",
+      "maxLeverage": 3,
+      "minOrderSize": 1,
+      "tickSize": 0.0001
     },
     {
-      "id": "DEEP_DBUSDC",
-      "name": "DEEP / DBUSDC",
+      "id": "DEEP_USDC",
+      "name": "DEEP / USDC",
       "baseAsset": "DEEP",
-      "quoteAsset": "DBUSDC",
-      "maxLeverage": 5,
+      "quoteAsset": "USDC",
+      "maxLeverage": 3,
       "minOrderSize": 100,
       "tickSize": 0.000001
     }
@@ -31,6 +31,10 @@
   "network": {
     "testnet": {
       "rpcUrl": "https://fullnode.testnet.sui.io:443",
+      "deepbookPackageId": "0x0"
+    },
+    "mainnet": {
+      "rpcUrl": "https://fullnode.mainnet.sui.io:443",
       "deepbookPackageId": "0x0"
     }
   }

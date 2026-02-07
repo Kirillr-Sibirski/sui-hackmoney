@@ -1,0 +1,37 @@
+{
+  "pools": [
+    {
+      "id": "SUI_DBUSDC",
+      "name": "SUI / DBUSDC",
+      "baseAsset": "SUI",
+      "quoteAsset": "DBUSDC",
+      "maxLeverage": 5,
+      "minOrderSize": 1,
+      "tickSize": 0.0001
+    },
+    {
+      "id": "DEEP_SUI",
+      "name": "DEEP / SUI",
+      "baseAsset": "DEEP",
+      "quoteAsset": "SUI",
+      "maxLeverage": 5,
+      "minOrderSize": 100,
+      "tickSize": 0.000001
+    },
+    {
+      "id": "DEEP_DBUSDC",
+      "name": "DEEP / DBUSDC",
+      "baseAsset": "DEEP",
+      "quoteAsset": "DBUSDC",
+      "maxLeverage": 5,
+      "minOrderSize": 100,
+      "tickSize": 0.000001
+    }
+  ],
+  "network": {
+    "testnet": {
+      "rpcUrl": "https://fullnode.testnet.sui.io:443",
+      "deepbookPackageId": "0x0"
+    }
+  }
+}

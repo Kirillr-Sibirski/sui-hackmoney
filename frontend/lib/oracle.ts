@@ -1,15 +1,15 @@
 import { HermesClient } from "@pythnetwork/hermes-client";
 import priceIds from "@/config/price_ids.json";
 
-const HERMES_ENDPOINT = "https://hermes-beta.pyth.network";
+const HERMES_ENDPOINT = "https://hermes.pyth.network";
 
 const client = new HermesClient(HERMES_ENDPOINT, {});
 
 // Map symbol → Pyth price feed ID (USD-denominated, stored with 0x prefix)
 const PRICE_FEED_IDS: Record<string, string> = priceIds;
 
-// DBUSDC is treated as 1 USD — no oracle needed
-const STABLECOIN_SYMBOLS = new Set(["DBUSDC"]);
+// USDC is treated as 1 USD — no oracle needed
+const STABLECOIN_SYMBOLS = new Set(["USDC"]);
 
 /** Strip 0x prefix for Pyth API calls */
 function stripHex(id: string): string {
@@ -60,7 +60,7 @@ export async function fetchPrices(): Promise<Record<string, PriceData>> {
   const ids = getAllPriceFeedIds();
 
   const result: Record<string, PriceData> = {
-    DBUSDC: { price: 1, confidence: 0, timestamp: Date.now() / 1000 },
+    USDC: { price: 1, confidence: 0, timestamp: Date.now() / 1000 },
   };
 
   if (ids.length === 0) return result;
@@ -98,7 +98,7 @@ export function subscribeToPrices(
   if (ids.length === 0) return () => {};
 
   const prices: Record<string, PriceData> = {
-    DBUSDC: { price: 1, confidence: 0, timestamp: Date.now() / 1000 },
+    USDC: { price: 1, confidence: 0, timestamp: Date.now() / 1000 },
   };
 
   let eventSource: EventSource | null = null;
@@ -146,7 +146,7 @@ export function subscribeToPrices(
 
 /**
  * Get the price of baseSymbol in terms of quoteSymbol.
- * e.g. getQuotePrice("SUI", "DBUSDC", prices) → SUI price in USD
+ * e.g. getQuotePrice("SUI", "USDC", prices) → SUI price in USD
  * e.g. getQuotePrice("DEEP", "SUI", prices) → DEEP price in SUI
  */
 export function getQuotePrice(

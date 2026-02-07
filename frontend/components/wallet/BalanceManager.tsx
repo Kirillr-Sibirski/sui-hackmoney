@@ -26,15 +26,15 @@ import coins from "@/config/coins.json";
 const assets = Object.entries(coins.coins).map(([symbol]) => ({
   symbol,
   // Mock balances — will be replaced with on-chain data
-  balance: symbol === "DBUSDC" ? 5000 : symbol === "SUI" ? 1500 : 50000,
-  tradingBalance: symbol === "DBUSDC" ? 1234.56 : 0,
+  balance: symbol === "USDC" ? 5000 : symbol === "SUI" ? 1500 : 50000,
+  tradingBalance: symbol === "USDC" ? 1234.56 : 0,
   cheaper: symbol === "DEEP",
 }));
 
 export function BalanceManager() {
   const [action, setAction] = useState("deposit");
   const [amount, setAmount] = useState("");
-  const [selectedAsset, setSelectedAsset] = useState("DBUSDC");
+  const [selectedAsset, setSelectedAsset] = useState("USDC");
 
   const currentAsset = assets.find((a) => a.symbol === selectedAsset) || assets[0];
 

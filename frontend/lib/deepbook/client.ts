@@ -6,19 +6,19 @@
 
 import {
   DeepBookClient,
-  testnetPackageIds,
-  testnetMarginPools,
-  testnetCoins,
+  mainnetPackageIds,
+  mainnetMarginPools,
+  mainnetCoins,
 } from "@mysten/deepbook-v3";
 import type { SuiGrpcClient } from "@mysten/sui/grpc";
 
 // Re-export useful constants
-export { testnetPackageIds, testnetMarginPools, testnetCoins };
+export { mainnetPackageIds, mainnetMarginPools, mainnetCoins };
 
 // DeepBook configuration
 export const DEEPBOOK_CONFIG = {
-  testnet: {
-    ...testnetPackageIds,
+  mainnet: {
+    ...mainnetPackageIds,
   },
 } as const;
 
@@ -31,7 +31,7 @@ export function createDeepBookClient(
 ): DeepBookClient {
   return new DeepBookClient({
     client: suiClient,
-    network: "testnet",
+    network: "mainnet",
     address,
   });
 }

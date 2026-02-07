@@ -11,7 +11,8 @@ import {
 const FALLBACK_PRICES: Record<string, PriceData> = {
   SUI: { price: 3.45, confidence: 0, timestamp: 0 },
   DEEP: { price: 0.042, confidence: 0, timestamp: 0 },
-  DBUSDC: { price: 1, confidence: 0, timestamp: 0 },
+  WAL: { price: 0.55, confidence: 0, timestamp: 0 },
+  USDC: { price: 1, confidence: 0, timestamp: 0 },
 };
 
 export function usePrices() {
@@ -60,7 +61,7 @@ export function usePrices() {
     [prices]
   );
 
-  /** Get price of base in terms of quote (e.g., SUI/DBUSDC, DEEP/SUI) */
+  /** Get price of base in terms of quote (e.g., SUI/USDC, DEEP/SUI) */
   const getPairPrice = useCallback(
     (baseSymbol: string, quoteSymbol: string): number => {
       return getQuotePrice(baseSymbol, quoteSymbol, prices);

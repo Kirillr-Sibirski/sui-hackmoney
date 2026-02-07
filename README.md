@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/sui-logo.svg" alt="Ōshio" width="80" />
+  <img src="frontend/public/logo.svg" alt="Ōshio" width="80" />
 </p>
 
 <h1 align="center">Ōshio</h1>

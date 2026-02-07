@@ -14,7 +14,7 @@ export function createDeepBookClient(
 ): DeepBookClient {
   return new DeepBookClient({
     client: suiClient,
-    network: "testnet",
+    network: "mainnet",
     address,
   });
 }

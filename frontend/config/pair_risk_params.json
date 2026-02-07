@@ -1,26 +1,26 @@
 {
   "riskParameters": {
-    "SUI_DBUSDC": {
-      "minWithdrawRiskRatio": 2,
+    "SUI_USDC": {
+      "minWithdrawRiskRatio": 2.0,
       "minBorrowRiskRatio": 1.25,
       "liquidationRiskRatio": 1.1,
       "targetLiquidationRiskRatio": 1.25,
       "userLiquidationReward": 0.02,
       "poolLiquidationReward": 0.03
     },
-    "DEEP_SUI": {
-      "minWithdrawRiskRatio": 2,
-      "minBorrowRiskRatio": 1.25,
-      "liquidationRiskRatio": 1.1,
-      "targetLiquidationRiskRatio": 1.25,
+    "WAL_USDC": {
+      "minWithdrawRiskRatio": 2.0,
+      "minBorrowRiskRatio": 1.5,
+      "liquidationRiskRatio": 1.2,
+      "targetLiquidationRiskRatio": 1.5,
       "userLiquidationReward": 0.02,
       "poolLiquidationReward": 0.03
     },
-    "DEEP_DBUSDC": {
-      "minWithdrawRiskRatio": 2,
-      "minBorrowRiskRatio": 1.25,
-      "liquidationRiskRatio": 1.1,
-      "targetLiquidationRiskRatio": 1.25,
+    "DEEP_USDC": {
+      "minWithdrawRiskRatio": 2.0,
+      "minBorrowRiskRatio": 1.5,
+      "liquidationRiskRatio": 1.2,
+      "targetLiquidationRiskRatio": 1.5,
       "userLiquidationReward": 0.02,
       "poolLiquidationReward": 0.03
     }

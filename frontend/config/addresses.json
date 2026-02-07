@@ -1,9 +1,9 @@
 {
   "marginConfig": {
-    "packageId": "0xd6a42f4df4db73d68cbeb52be66698d2fe6a9464f45ad113ca52b0c6ebd918b6",
-    "registryId": "0x48d7640dfae2c6e9ceeada197a7a1643984b5a24c55a0c6c023dac77e0339f75"
+    "packageId": "0x97d9473771b01f77b0940c589484184b49f6444627ec121314fae6a6d36fb86b",
+    "registryId": "0x0e40998b359a9ccbab22a98ed21bd4346abf19158bc7980c8291908086b3a742"
   },
   "pythConfig": {
-    "packageId": "0xf7114cc10266d90c0c9e4b84455bddf29b40bd78fe56832c7ac98682c3daa95b"
+    "packageId": "0x04e20ddf36af412a4096f9014f4a565af9e812db9a05cc40254846cf6ed0ad91"
   }
 }

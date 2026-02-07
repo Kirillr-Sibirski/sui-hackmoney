@@ -17,7 +17,7 @@ import { FloatingIcons } from "@/components/ui/floating-icons";
 import { SpotlightCard } from "@/components/ui/spotlight-card";
 import { PulseDot } from "@/components/ui/pulse-dot";
 import { PoolPairIcon, CoinIcon } from "@/components/ui/coin-icon";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, Loader2, AlertTriangle } from "lucide-react";
 import { calculateModifiedRiskRatio, getRiskColor, getRiskLabel } from "@/lib/risk";
 import { usePrices } from "@/hooks/use-prices";
 import Link from "next/link";
@@ -25,19 +25,19 @@ import Link from "next/link";
 const mockPositions = [
   {
     id: "1",
-    pool: "SUI / DBUSDC",
-    poolId: "SUI_DBUSDC",
+    pool: "SUI / USDC",
+    poolId: "SUI_USDC",
     baseSymbol: "SUI",
-    quoteSymbol: "DBUSDC",
+    quoteSymbol: "USDC",
     side: "Long" as const,
     collateral: 500,
-    collateralAsset: "DBUSDC",
+    collateralAsset: "USDC",
     leverage: 3,
     currentPrice: 3.45,
     liqPrice: 2.28,
     risk: 1.2,
     debt: 1000,
-    debtAsset: "DBUSDC",
+    debtAsset: "USDC",
     interestRate: 0.085,
     // On-chain MarginManager object ID (from newMarginManager tx)
     managerAddress: "0xabc123...",
@@ -72,7 +72,7 @@ const ModifyPopover = dynamic(
     import("@mysten/dapp-kit-react").then((dappKit) =>
       import("@/lib/deepbook/transactions").then((txMod) => {
           const { useCurrentAccount, useCurrentClient, useDAppKit } = dappKit;
-          const { buildDepositTx, buildWithdrawTx, createClientWithManagers } = txMod;
+          const { buildDepositTx, buildWithdrawTx, createClientWithManagers, formatTxError } = txMod;
 
           return function ModifyPopoverInner({
             position,
@@ -161,7 +161,7 @@ const ModifyPopover = dynamic(
                 setAmount("");
               } catch (err: any) {
                 console.error("Modify collateral failed:", err);
-                setTxStatus(`Error: ${err?.message || "Transaction failed"}`);
+                setTxStatus(formatTxError(err));
               } finally {
                 setIsSubmitting(false);
               }
@@ -279,7 +279,9 @@ const ModifyPopover = dynamic(
                         className={`text-xs text-center ${
                           txStatus.startsWith("Error")
                             ? "text-rose-500"
-                            : "text-emerald-500"
+                            : txStatus === "Transaction cancelled"
+                              ? "text-muted-foreground"
+                              : "text-emerald-500"
                         }`}
                       >
                         {txStatus}
@@ -328,6 +330,230 @@ const ModifyPopover = dynamic(
   }
 );
 
+/**
+ * ClosePopover — confirmation + real SDK close position flow.
+ */
+const ClosePopover = dynamic(
+  () =>
+    import("@mysten/dapp-kit-react").then((dappKit) =>
+      import("@/lib/deepbook/transactions").then((txMod) => {
+          const { useCurrentAccount, useCurrentClient, useDAppKit } = dappKit;
+          const {
+            buildClosePositionTx,
+            buildWithdrawAllCollateralTx,
+            createClientWithManagers,
+            formatTxError,
+            isUserRejection,
+          } = txMod;
+
+          return function ClosePopoverInner({
+            position,
+          }: {
+            position: PositionType;
+          }) {
+            const account = useCurrentAccount();
+            const suiClient = useCurrentClient();
+            const dAppKitInstance = useDAppKit();
+
+            const [open, setOpen] = useState(false);
+            const [isSubmitting, setIsSubmitting] = useState(false);
+            const [txStage, setTxStage] = useState<{ step: number; total: number; label: string } | null>(null);
+            const [txStatus, setTxStatus] = useState<string | null>(null);
+
+            const handleClose = async () => {
+              if (!account?.address || !suiClient) {
+                setTxStatus("Connect wallet first");
+                return;
+              }
+
+              setIsSubmitting(true);
+              setTxStatus(null);
+
+              try {
+                const managerKey = position.poolId;
+                const client = createClientWithManagers(
+                  suiClient,
+                  account.address,
+                  {
+                    [managerKey]: {
+                      address: position.managerAddress,
+                      poolKey: position.poolId,
+                    },
+                  }
+                );
+
+                // Step 1: Close order + settle + repay debt
+                setTxStage({ step: 1, total: 2, label: "Closing position & repaying debt" });
+
+                // Order quantity = collateral * leverage in base asset terms
+                // For simplicity, use collateral * leverage / current price for the order size
+                const orderQuantity =
+                  position.side === "Long"
+                    ? (position.collateral * position.leverage) /
+                      position.currentPrice
+                    : position.collateral * position.leverage;
+
+                const closeTx = buildClosePositionTx(
+                  client,
+                  managerKey,
+                  position.poolId,
+                  position.side === "Long" ? "long" : "short",
+                  orderQuantity,
+                  position.collateralAsset === "DEEP"
+                );
+
+                await dAppKitInstance.signAndExecuteTransaction({
+                  transaction: closeTx,
+                });
+
+                // Step 2: Withdraw remaining collateral
+                setTxStage({ step: 2, total: 2, label: "Withdrawing collateral" });
+
+                const withdrawTx = buildWithdrawAllCollateralTx(
+                  client,
+                  managerKey,
+                  position.baseSymbol,
+                  position.collateralAsset,
+                  position.collateral
+                );
+
+                await dAppKitInstance.signAndExecuteTransaction({
+                  transaction: withdrawTx,
+                });
+
+                setTxStage(null);
+                setTxStatus("Position closed!");
+              } catch (err: any) {
+                console.error("Close position failed:", err);
+                setTxStage(null);
+                if (isUserRejection(err)) {
+                  setTxStatus("Transaction cancelled");
+                } else {
+                  setTxStatus(formatTxError(err));
+                }
+              } finally {
+                setIsSubmitting(false);
+              }
+            };
+
+            return (
+              <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setTxStatus(null); setTxStage(null); } }}>
+                <PopoverTrigger asChild>
+                  <Button
+                    size="sm"
+                    className="bg-rose-500/15 text-rose-500 border border-rose-500/30 hover:bg-rose-500/25 hover:text-rose-400"
+                  >
+                    Close
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72" align="end">
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-semibold text-sm flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-500" />
+                        Close Position
+                      </h3>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {position.pool} — {position.side} {position.leverage}x
+                      </p>
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Collateral</span>
+                        <span className="font-mono font-medium flex items-center gap-1.5">
+                          <CoinIcon symbol={position.collateralAsset} size={14} />
+                          {position.collateral.toLocaleString()} {position.collateralAsset}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Debt</span>
+                        <span className="font-mono font-medium flex items-center gap-1.5">
+                          <CoinIcon symbol={position.debtAsset} size={14} />
+                          {position.debt.toLocaleString()} {position.debtAsset}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md bg-rose-500/10 border border-rose-500/20 px-3 py-2.5">
+                      <p className="text-xs text-rose-400">
+                        This will close your position at market price, repay all debt, and withdraw remaining collateral.
+                      </p>
+                    </div>
+
+                    {/* Stage progress */}
+                    {isSubmitting && txStage && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">
+                            Step {txStage.step} of {txStage.total}
+                          </span>
+                          <span className="text-foreground font-medium">{txStage.label}</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-rose-500 transition-all duration-500"
+                            style={{ width: `${(txStage.step / txStage.total) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Status message */}
+                    {txStatus && !isSubmitting && (
+                      <p
+                        className={`text-xs text-center ${
+                          txStatus.startsWith("Error")
+                            ? "text-rose-500"
+                            : txStatus === "Transaction cancelled"
+                              ? "text-muted-foreground"
+                              : "text-emerald-500"
+                        }`}
+                      >
+                        {txStatus}
+                      </p>
+                    )}
+
+                    <Button
+                      size="sm"
+                      className="w-full bg-rose-500 hover:bg-rose-600 text-white"
+                      disabled={isSubmitting || !account}
+                      onClick={handleClose}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                          {txStage?.label ?? "Closing..."}
+                        </>
+                      ) : !account ? (
+                        "Connect Wallet"
+                      ) : (
+                        "Confirm Close Position"
+                      )}
+                    </Button>
+                  </div>
+                </PopoverContent>
+              </Popover>
+            );
+          };
+        })
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <Button
+        size="sm"
+        className="bg-rose-500/15 text-rose-500 border border-rose-500/30"
+        disabled
+      >
+        Close
+      </Button>
+    ),
+  }
+);
+
 export default function DashboardPage() {
   const { getUsdPrice } = usePrices();
   const totalCollateral = mockPositions.reduce(
@@ -350,7 +576,7 @@ export default function DashboardPage() {
         <SpotlightCard className="mb-8 p-6">
           <p className="text-sm text-muted-foreground">Total Collateral</p>
           <p className="text-3xl font-bold text-primary">
-            ${totalCollateral.toLocaleString()}
+            ${totalCollateral.toFixed(2).toLocaleString()}
           </p>
         </SpotlightCard>
 
@@ -401,12 +627,7 @@ export default function DashboardPage() {
                         position={position}
                         collateralPrice={getUsdPrice(position.collateralAsset)}
                       />
-                      <Button
-                        size="sm"
-                        className="bg-rose-500/15 text-rose-500 border border-rose-500/30 hover:bg-rose-500/25 hover:text-rose-400"
-                      >
-                        Close
-                      </Button>
+                      <ClosePopover position={position} />
                     </div>
                   </div>
 
