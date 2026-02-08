@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   fetchPrices,
   subscribeToPrices,
@@ -40,15 +40,26 @@ export function usePrices() {
         }
       });
 
-    // Subscribe to streaming updates
+    // Subscribe to streaming updates, throttled to avoid excessive re-renders
+    let pendingData: Record<string, PriceData> | null = null;
+    let throttleTimer: ReturnType<typeof setTimeout> | null = null;
     const cleanup = subscribeToPrices((data) => {
-      if (mountedRef.current) {
-        setPrices((prev) => ({ ...prev, ...data }));
+      if (!mountedRef.current) return;
+      pendingData = data;
+      if (!throttleTimer) {
+        throttleTimer = setTimeout(() => {
+          throttleTimer = null;
+          if (pendingData && mountedRef.current) {
+            setPrices((prev) => ({ ...prev, ...pendingData! }));
+            pendingData = null;
+          }
+        }, 2000);
       }
     });
 
     return () => {
       mountedRef.current = false;
+      if (throttleTimer) clearTimeout(throttleTimer);
       cleanup();
     };
   }, []);

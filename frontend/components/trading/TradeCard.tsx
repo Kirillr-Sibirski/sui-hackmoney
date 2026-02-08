@@ -212,18 +212,31 @@ const TradeCardInner = dynamic(
               const collateralUsd = collateralNum * collateralAssetPrice;
               const borrowUsdRaw = exposureUsd - collateralUsd;
 
-              // Convert borrow USD back to the actual borrowed asset
-              // Long → borrow quote, Short → borrow base
-              // Add 0.5% buffer for taker fees — bid orders need extra quote
-              // to cover the fee on top of the fill cost
+              // Convert borrow to the actual borrowed asset amount.
+              // Long → borrow quote (need quote to buy base)
+              // Short → borrow base (need base to sell)
+              // Add 0.5% buffer for taker fees
               const FEE_BUFFER = 1.005;
               let borrowAmount: number;
-              if (borrowUsdRaw <= 0) {
-                borrowAmount = 0; // Fully collateralized, no borrow needed
+              if (borrowUsdRaw <= 0 && side === "long") {
+                borrowAmount = 0; // Fully collateralized long, no borrow needed
               } else if (side === "long") {
-                borrowAmount = quotePrice > 0 ? (borrowUsdRaw / quotePrice) * FEE_BUFFER : 0;
+                // Long: need quote = orderQuantity * pairPrice. Collateral in quote reduces this.
+                if (collateral === quoteAsset) {
+                  const totalQuoteNeeded = orderQuantity * pairPrice;
+                  borrowAmount = Math.max(0, (totalQuoteNeeded - collateralNum) * FEE_BUFFER);
+                } else {
+                  // Collateral is base — still need all the quote
+                  borrowAmount = quotePrice > 0 ? (borrowUsdRaw / quotePrice) * FEE_BUFFER : 0;
+                }
               } else {
-                borrowAmount = basePrice > 0 ? (borrowUsdRaw / basePrice) * FEE_BUFFER : 0;
+                // Short: need base = orderQuantity to sell. Collateral in base reduces this.
+                if (collateral === baseAsset) {
+                  borrowAmount = Math.max(0, (orderQuantity - collateralNum) * FEE_BUFFER);
+                } else {
+                  // Collateral is quote/DEEP — need to borrow all the base to sell
+                  borrowAmount = orderQuantity * FEE_BUFFER;
+                }
               }
 
               console.log("[TradeCard] Position calc (USD):", {
@@ -551,9 +564,6 @@ const TradeCardInner = dynamic(
                 ? (displayCollateralUsd + displayBorrowUsd) / displayBorrowUsd
                 : Infinity;
 
-              const exposure = amountNum; // Amount = total position size
-              const exposureUsd = displayExposureUsd;
-
               const liqFactor = displayBorrowUsd > 0
                 ? (liqRiskRatio * displayBorrowUsd) / (displayCollateralUsd + displayBorrowUsd)
                 : 0;
@@ -562,11 +572,8 @@ const TradeCardInner = dynamic(
                   ? basePrice * liqFactor
                   : basePrice * (2 - liqFactor);
 
-              const pnlUp = exposure * basePrice * 0.1;
-              const pnlDown = exposure * basePrice * 0.1;
-
-              return { exposureUsd, liqPrice, exposure, riskRatio, pnlUp, pnlDown };
-            }, [isComplete, amountNum, displayExposureUsd, displayCollateralUsd, displayBorrowUsd, side, basePrice, liqRiskRatio]);
+              return { liqPrice, riskRatio };
+            }, [isComplete, displayCollateralUsd, displayBorrowUsd, side, basePrice, liqRiskRatio]);
 
             return (
               <SpotlightCard className="w-full max-w-lg">
@@ -837,40 +844,6 @@ const TradeCardInner = dynamic(
                           </span>
                         </div>
 
-                        <div className="flex justify-between text-sm items-center">
-                          <span className="text-muted-foreground flex items-center gap-1.5">
-                            Exposure
-                            <Popover>
-                              <PopoverTrigger asChild>
-                                <button className="text-muted-foreground/60 hover:text-foreground transition-colors">
-                                  <Info className="w-3.5 h-3.5" />
-                                </button>
-                              </PopoverTrigger>
-                              <PopoverContent side="top" className="w-64 text-xs space-y-2 p-3">
-                                <p className="font-medium text-foreground">Projected PnL</p>
-                                <div className="flex justify-between">
-                                  <span className="text-muted-foreground">{baseAsset} +10%</span>
-                                  <span className="text-emerald-500 font-mono">
-                                    {side === "long" ? "+" : "-"}${calculations.pnlUp.toFixed(2)}
-                                  </span>
-                                </div>
-                                <div className="flex justify-between">
-                                  <span className="text-muted-foreground">{baseAsset} -10%</span>
-                                  <span className="text-rose-500 font-mono">
-                                    {side === "long" ? "-" : "+"}${calculations.pnlDown.toFixed(2)}
-                                  </span>
-                                </div>
-                              </PopoverContent>
-                            </Popover>
-                          </span>
-                          <span className="font-mono">
-                            {calculations.exposure < 0.01
-                              ? calculations.exposure.toPrecision(3)
-                              : calculations.exposure < 1
-                                ? calculations.exposure.toFixed(4)
-                                : calculations.exposure.toFixed(2)} {baseAsset}
-                          </span>
-                        </div>
                       </div>
                     </>
                   )}

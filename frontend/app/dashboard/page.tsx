@@ -172,26 +172,26 @@ const DashboardInner = dynamic(
                           >
                             <div className="flex items-center justify-between mb-4">
                               <div className="flex items-center gap-3">
-                                <span
-                                  className={`px-2 py-1 rounded text-xs font-medium ${
-                                    position.side === "long"
-                                      ? "bg-emerald-500/20 text-emerald-500"
-                                      : "bg-rose-500/20 text-rose-500"
-                                  }`}
-                                >
-                                  {position.side === "long" ? "Long" : "Short"}
-                                </span>
+                                {(hasDebt || position.side === "long") && (
+                                  <span
+                                    className={`px-2 py-1 rounded text-xs font-medium ${
+                                      position.side === "long"
+                                        ? "bg-emerald-500/20 text-emerald-500"
+                                        : "bg-rose-500/20 text-rose-500"
+                                    }`}
+                                  >
+                                    {position.side === "long" ? "Long" : "Short"}
+                                  </span>
+                                )}
                                 <PoolPairIcon
                                   baseSymbol={position.baseSymbol}
                                   quoteSymbol={position.quoteSymbol}
                                   size={18}
                                 />
                                 <span className="font-medium">{position.pool}</span>
-                                {hasDebt && (
-                                  <span className="text-primary text-sm font-medium">
-                                    {leverage.toFixed(1)}x
-                                  </span>
-                                )}
+                                <span className="text-primary text-sm font-medium">
+                                  {leverage.toFixed(1)}x
+                                </span>
                               </div>
                               <div className="flex items-center gap-2">
                                 <ModifyPopover
@@ -629,10 +629,11 @@ const ClosePopover = dynamic(
                 },
               });
 
-              // Long → sell all base, Short → buy back base debt
+              // Long → sell all base (with small buffer to avoid stale over-sell)
+              // Short → buy back base debt
               const orderQuantity =
                 position.side === "long"
-                  ? position.baseAsset
+                  ? position.baseAsset * 0.999
                   : position.baseDebt;
 
               const hasDebt = position.quoteDebt > 0.0001 || position.baseDebt > 0.0001;
