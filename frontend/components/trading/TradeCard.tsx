@@ -21,7 +21,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Sparkles, Loader2, Info, ExternalLink, AlertTriangle } from "lucide-react";
+import { Loader2, Info, ExternalLink, AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import pools from "@/config/pools.json";
 import coins from "@/config/coins.json";
@@ -465,15 +465,12 @@ const TradeCardInner = dynamic(
 
             const collateralOptions = useMemo(() => {
               const seen = new Set<string>();
-              const opts: { symbol: string; cheaper: boolean }[] = [];
+              const opts: { symbol: string }[] = [];
               for (const s of [quoteAsset, baseAsset]) {
                 if (!seen.has(s) && coinSymbols.includes(s as keyof typeof coins.coins)) {
                   seen.add(s);
-                  opts.push({ symbol: s, cheaper: false });
+                  opts.push({ symbol: s });
                 }
-              }
-              if (!seen.has("DEEP")) {
-                opts.push({ symbol: "DEEP", cheaper: true });
               }
               return opts;
             }, [baseAsset, quoteAsset]);
@@ -485,8 +482,6 @@ const TradeCardInner = dynamic(
                 setCollateral(validSymbols[0]);
               }
             }, [collateralOptions, collateral]);
-
-            const isDeepSelected = collateral === "DEEP";
 
             // --- All display calculations in USD ---
             const collateralPrice = getUsdPrice(collateral);
@@ -647,12 +642,6 @@ const TradeCardInner = dynamic(
                     <div className="flex items-center justify-between">
                       <Label>Collateral</Label>
                       <div className="flex items-center gap-2">
-                        {isDeepSelected && (
-                          <span className="flex items-center gap-1 text-xs text-primary">
-                            <Sparkles className="w-3 h-3" />
-                            Cheaper fees
-                          </span>
-                        )}
                         {walletBalance !== null && (
                           <button
                             type="button"
