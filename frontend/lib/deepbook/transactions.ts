@@ -73,7 +73,8 @@ export function extractMarginManagerAddress(
 }
 
 /**
- * Extract a created Referral object ID from a transaction result.
+ * Extract a created DeepBookPoolReferral object ID from a transaction result.
+ * Specifically matches "DeepBookPoolReferral" and skips dynamic_field wrappers.
  * Requires `include: { effects: true, objectTypes: true }` when fetching.
  */
 export function extractReferralAddress(
@@ -90,7 +91,21 @@ export function extractReferralAddress(
     };
   }
 ): string | null {
-  return extractCreatedObjectAddress(result, "Referral");
+  if (result.$kind === "FailedTransaction" || !result.Transaction) {
+    return null;
+  }
+
+  const objectTypes = result.Transaction.objectTypes ?? {};
+  const changedObjects = result.Transaction.effects?.changedObjects ?? [];
+
+  const obj = changedObjects.find(
+    (o) =>
+      o.idOperation === "Created" &&
+      objectTypes[o.objectId]?.includes("DeepBookPoolReferral") &&
+      !objectTypes[o.objectId]?.includes("dynamic_field")
+  );
+
+  return obj?.objectId ?? null;
 }
 
 /**

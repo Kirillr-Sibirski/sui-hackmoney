@@ -1,7 +1,7 @@
 {
   "referrals": {
-    "SUI_USDC": "0x89cd9a37cff2b5542bc6c9609c695209de086d835079a87aec4e3b4e6f2a0017",
+    "SUI_USDC": "0xa9f78f48895b4aec6270824c347ace0defdf7c4ae5be5b6e5586dd8b70e937f7",
     "WAL_USDC": "0xbd5197dfb532299f5153a5b402bdbae8c76fbd2a094c916aa5a444ca4c971f80",
-    "DEEP_USDC": "0x9cb2a671125bba9d3793106e0dd73061e54dbff3ada8ef8900fb74f0c33e2194"
+    "DEEP_USDC": "0xec3645c065f79111e7da685c1b6b15f71a1ce9b3ae8ddf317944c871b07ed97b"
   }
 }
