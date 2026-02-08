@@ -271,28 +271,101 @@ export function buildRepayTx(
 }
 
 /**
- * Build a PTB to close a position: reduce-only order → settle → repay debt.
+ * Build a simulation TX: close position + query resulting manager state.
+ * Used to determine exact post-close balances for the withdrawal step.
  *
- * Steps:
- *   1. placeReduceOnlyMarketOrder (sell for long, buy for short)
- *   2. withdrawSettledAmounts (pull settled proceeds into manager)
- *   3. repayQuote (long) / repayBase (short) — repay all debt
- *
- * Withdraw of remaining collateral is done in a separate tx because
- * the exact remaining balance isn't known until this tx completes.
+ * Commands:
+ *   0: placeMarketOrder
+ *   1: withdrawSettledAmounts
+ *   2: repayQuote/repayBase
+ *   3: managerState (read post-close balances)
  */
-export function buildClosePositionTx(
+export function buildCloseSimulationTx(
   client: DeepBookClient,
   managerKey: string,
   poolKey: string,
+  managerAddress: string,
   side: "long" | "short",
   orderQuantity: number,
   payWithDeep: boolean
 ): Transaction {
   const tx = new Transaction();
 
+  client.poolProxy.placeMarketOrder({
+    poolKey,
+    marginManagerKey: managerKey,
+    clientOrderId: generateClientOrderId(),
+    quantity: orderQuantity,
+    isBid: side !== "long",
+    payWithDeep,
+  })(tx);
+
+  client.poolProxy.withdrawSettledAmounts(managerKey)(tx);
+
+  if (side === "long") {
+    client.marginManager.repayQuote(managerKey)(tx);
+  } else {
+    client.marginManager.repayBase(managerKey)(tx);
+  }
+
+  // Query the resulting state so we know exact remaining balances
+  client.marginManager.managerState(poolKey, managerAddress)(tx);
+
+  return tx;
+}
+
+/**
+ * Parse remaining base/quote amounts from a close simulation result.
+ * managerState is at the given command index.
+ */
+export function parsePostCloseBalances(
+  simResult: any,
+  stateCommandIndex: number,
+  baseSymbol: string,
+  quoteSymbol: string
+): { baseAmount: number; quoteAmount: number } {
+  const coinConfig = coins.coins as Record<string, { decimals: number }>;
+  const baseScalar = Math.pow(10, coinConfig[baseSymbol]?.decimals ?? 9);
+  const quoteScalar = Math.pow(10, coinConfig[quoteSymbol]?.decimals ?? 6);
+
+  const returnValues = (simResult as any).commandResults?.[stateCommandIndex]?.returnValues;
+  if (!returnValues || returnValues.length < 7) {
+    throw new Error(`Unexpected simulation returnValues (len=${returnValues?.length})`);
+  }
+
+  const baseAssetRaw = Number(decodeBcsU64(returnValues[3].bcs));
+  const quoteAssetRaw = Number(decodeBcsU64(returnValues[4].bcs));
+
+  return {
+    baseAmount: baseAssetRaw / baseScalar,
+    quoteAmount: quoteAssetRaw / quoteScalar,
+  };
+}
+
+/**
+ * Build a single PTB to fully close a position in ONE transaction:
+ *   1. placeMarketOrder (sell for long, buy for short)
+ *   2. withdrawSettledAmounts
+ *   3. repayQuote / repayBase (all debt)
+ *   4. withdrawBase + withdrawQuote (remaining assets)
+ *   5. transferObjects (send withdrawn Coins to the user)
+ *
+ * Withdrawal amounts come from simulating steps 1-3 first.
+ */
+export function buildFullClosePositionTx(
+  client: DeepBookClient,
+  managerKey: string,
+  poolKey: string,
+  side: "long" | "short",
+  orderQuantity: number,
+  payWithDeep: boolean,
+  withdrawBaseAmount: number,
+  withdrawQuoteAmount: number,
+  senderAddress: string
+): Transaction {
+  const tx = new Transaction();
+
   // Step 1: Place market order to close the position
-  // Long → sell base (isBid=false), Short → buy base (isBid=true)
   client.poolProxy.placeMarketOrder({
     poolKey,
     marginManagerKey: managerKey,
@@ -312,53 +385,130 @@ export function buildClosePositionTx(
     client.marginManager.repayBase(managerKey)(tx);
   }
 
-  return tx;
-}
+  // Step 4: Withdraw remaining assets — returns Coin objects that MUST be transferred
+  const coinsToTransfer: any[] = [];
+  if (withdrawBaseAmount > 0) {
+    const baseCoin = client.marginManager.withdrawBase(managerKey, withdrawBaseAmount)(tx);
+    coinsToTransfer.push(baseCoin);
+  }
+  if (withdrawQuoteAmount > 0) {
+    const quoteCoin = client.marginManager.withdrawQuote(managerKey, withdrawQuoteAmount)(tx);
+    coinsToTransfer.push(quoteCoin);
+  }
 
-/**
- * Build a transaction to withdraw all remaining collateral after closing.
- */
-export function buildWithdrawAllCollateralTx(
-  client: DeepBookClient,
-  managerKey: string,
-  baseAsset: string,
-  collateralSymbol: string,
-  amount: number
-): Transaction {
-  const tx = new Transaction();
-
-  if (collateralSymbol === "DEEP") {
-    client.marginManager.withdrawDeep(managerKey, amount)(tx);
-  } else if (collateralSymbol === baseAsset) {
-    client.marginManager.withdrawBase(managerKey, amount)(tx);
-  } else {
-    client.marginManager.withdrawQuote(managerKey, amount)(tx);
+  // Step 5: Transfer coins to the user's wallet
+  if (coinsToTransfer.length > 0) {
+    tx.transferObjects(coinsToTransfer, senderAddress);
   }
 
   return tx;
 }
 
 /**
- * Build a transaction to withdraw ALL remaining assets (base + quote) from the manager.
- * Used after closing a position when we don't know the exact remaining breakdown.
- * Skips assets with zero balance.
+ * Build a TX to withdraw all assets from a margin manager (no sell, no repay).
+ * Used for 1x positions that have no debt — just need to pull collateral out.
+ * Properly transfers returned Coin objects to the sender.
  */
-export function buildWithdrawAllRemainingTx(
+export function buildWithdrawOnlyTx(
   client: DeepBookClient,
   managerKey: string,
-  baseAsset: string,
   baseAmount: number,
-  quoteAmount: number
+  quoteAmount: number,
+  senderAddress: string
 ): Transaction {
   const tx = new Transaction();
 
-  console.log("[buildWithdrawAllRemainingTx]", { managerKey, baseAsset, baseAmount, quoteAmount });
-
+  const coinsToTransfer: any[] = [];
   if (baseAmount > 0) {
-    client.marginManager.withdrawBase(managerKey, baseAmount)(tx);
+    const baseCoin = client.marginManager.withdrawBase(managerKey, baseAmount)(tx);
+    coinsToTransfer.push(baseCoin);
   }
   if (quoteAmount > 0) {
-    client.marginManager.withdrawQuote(managerKey, quoteAmount)(tx);
+    const quoteCoin = client.marginManager.withdrawQuote(managerKey, quoteAmount)(tx);
+    coinsToTransfer.push(quoteCoin);
+  }
+
+  if (coinsToTransfer.length > 0) {
+    tx.transferObjects(coinsToTransfer, senderAddress);
+  }
+
+  return tx;
+}
+
+/**
+ * Build a simulation TX for closing a small position (below min_size):
+ * deposit enough to repay debt, repay, then query the resulting state.
+ *
+ * For long: deposit quote → repayQuote → managerState
+ * For short: deposit base → repayBase → managerState
+ */
+export function buildSmallCloseSimulationTx(
+  client: DeepBookClient,
+  managerKey: string,
+  poolKey: string,
+  managerAddress: string,
+  side: "long" | "short",
+  depositAmount: number
+): Transaction {
+  const tx = new Transaction();
+
+  if (side === "long") {
+    // Long debt is in quote — deposit quote to cover debt, then repay
+    client.marginManager.depositQuote({ managerKey, amount: depositAmount })(tx);
+    client.marginManager.repayQuote(managerKey)(tx);
+  } else {
+    // Short debt is in base — deposit base to cover debt, then repay
+    client.marginManager.depositBase({ managerKey, amount: depositAmount })(tx);
+    client.marginManager.repayBase(managerKey)(tx);
+  }
+
+  // Query resulting state (cmd index 2)
+  client.marginManager.managerState(poolKey, managerAddress)(tx);
+
+  return tx;
+}
+
+/**
+ * Build a single TX to close a small position (below pool min_size):
+ * deposit → repay → withdraw all → transfer to sender.
+ *
+ * No market order needed — we deposit enough from the user's wallet to repay
+ * the debt directly, then withdraw everything that's left.
+ */
+export function buildSmallPositionCloseTx(
+  client: DeepBookClient,
+  managerKey: string,
+  side: "long" | "short",
+  depositAmount: number,
+  withdrawBaseAmount: number,
+  withdrawQuoteAmount: number,
+  senderAddress: string
+): Transaction {
+  const tx = new Transaction();
+
+  // Step 1: Deposit enough to cover debt
+  if (side === "long") {
+    client.marginManager.depositQuote({ managerKey, amount: depositAmount })(tx);
+    client.marginManager.repayQuote(managerKey)(tx);
+  } else {
+    client.marginManager.depositBase({ managerKey, amount: depositAmount })(tx);
+    client.marginManager.repayBase(managerKey)(tx);
+  }
+
+  // Step 2: Withdraw all remaining assets
+  const coinsToTransfer: any[] = [];
+  if (withdrawBaseAmount > 0) {
+    const baseCoin = client.marginManager.withdrawBase(managerKey, withdrawBaseAmount)(tx);
+    coinsToTransfer.push(baseCoin);
+  }
+  if (withdrawQuoteAmount > 0) {
+    const quoteCoin = client.marginManager.withdrawQuote(managerKey, withdrawQuoteAmount)(tx);
+    coinsToTransfer.push(quoteCoin);
+  }
+
+  // Step 3: Transfer to sender
+  if (coinsToTransfer.length > 0) {
+    tx.transferObjects(coinsToTransfer, senderAddress);
   }
 
   return tx;

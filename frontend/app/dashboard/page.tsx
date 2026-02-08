@@ -575,10 +575,12 @@ const ClosePopover = dynamic(
       import("@/lib/deepbook/transactions").then((txMod) => {
         const { useCurrentAccount, useCurrentClient, useDAppKit } = dappKit;
         const {
-          buildClosePositionTx,
-          buildRepayTx,
-          buildWithdrawAllRemainingTx,
-          queryManagerBalances,
+          buildCloseSimulationTx,
+          buildFullClosePositionTx,
+          buildSmallCloseSimulationTx,
+          buildSmallPositionCloseTx,
+          parsePostCloseBalances,
+          buildWithdrawOnlyTx,
           createClientWithManagers,
           formatTxError,
           isUserRejection,
@@ -625,94 +627,126 @@ const ClosePopover = dynamic(
                   ? position.baseAsset
                   : position.baseDebt;
 
+              const hasDebt = position.quoteDebt > 0.0001 || position.baseDebt > 0.0001;
+              const hasAssets = position.baseAsset > 0.0001 || position.quoteAsset > 0.0001;
+
               console.log("[ClosePosition] Position state:", {
                 managerKey,
                 managerAddress: position.managerAddress,
-                poolKey: position.poolKey,
                 side: position.side,
                 orderQuantity,
+                hasDebt, hasAssets,
                 baseAsset: position.baseAsset,
                 baseDebt: position.baseDebt,
                 quoteAsset: position.quoteAsset,
                 quoteDebt: position.quoteDebt,
               });
 
-              // === TX1: Sell/buy + settle + repay (all in one PTB) ===
-              if (orderQuantity > 0) {
-                setTxStage({ step: 1, total: 2, label: "Selling position & repaying debt" });
+              if (orderQuantity > 0 && hasDebt) {
+                // === LEVERAGED POSITION: sell + settle + repay + withdraw in one TX ===
+                setTxStage({ step: 1, total: 1, label: "Closing position & withdrawing funds" });
 
-                const closeTx = buildClosePositionTx(
-                  client,
-                  managerKey,
-                  position.poolKey,
-                  position.side,
-                  orderQuantity,
-                  false
+                // Simulate close to get exact post-close balances
+                const simTx = buildCloseSimulationTx(
+                  client, managerKey, position.poolKey,
+                  position.managerAddress, position.side,
+                  orderQuantity, false
                 );
-
-                // Dry run with a separate TX copy so the original stays usable for signing
-                const dryTx = buildClosePositionTx(
-                  client,
-                  managerKey,
-                  position.poolKey,
-                  position.side,
-                  orderQuantity,
-                  false
-                );
-                dryTx.setSender(account.address);
-                const dryResult = await suiClient.core.simulateTransaction({
-                  transaction: dryTx,
-                  include: { effects: true, events: true },
+                simTx.setSender(account.address);
+                const simResult = await suiClient.core.simulateTransaction({
+                  transaction: simTx,
+                  include: { commandResults: true, effects: true },
                 });
-                console.log("[ClosePosition] Close dry run:", JSON.stringify(dryResult, null, 2).slice(0, 2000));
+                console.log("[ClosePosition] Simulation result:", JSON.stringify(simResult, null, 2).slice(0, 2000));
 
-                if (dryResult.$kind === "FailedTransaction") {
-                  console.error("[ClosePosition] Close dry run FAILED:", dryResult.FailedTransaction);
-                  throw new Error(`Close position failed: ${JSON.stringify(dryResult.FailedTransaction)}`);
+                if (simResult.$kind === "FailedTransaction") {
+                  const errorStr = JSON.stringify(simResult.FailedTransaction);
+                  const isBelowMinSize = errorStr.includes('"1"') && errorStr.includes("validate_inputs");
+
+                  if (isBelowMinSize) {
+                    // Position too small for market order — close by depositing to repay debt
+                    console.log("[ClosePosition] Below min_size, using deposit-to-repay fallback");
+                    setTxStage({ step: 1, total: 1, label: "Repaying debt & withdrawing funds" });
+
+                    // Deposit enough of the debt asset to repay (with 1% buffer for interest)
+                    const debtAmount = position.side === "long" ? position.quoteDebt : position.baseDebt;
+                    const depositAmount = debtAmount * 1.01;
+
+                    // Simulate to get exact post-repay balances (managerState at cmd index 2)
+                    const smallSimTx = buildSmallCloseSimulationTx(
+                      client, managerKey, position.poolKey,
+                      position.managerAddress, position.side, depositAmount
+                    );
+                    smallSimTx.setSender(account.address);
+                    const smallSimResult = await suiClient.core.simulateTransaction({
+                      transaction: smallSimTx,
+                      include: { commandResults: true, effects: true },
+                    });
+                    console.log("[ClosePosition] Small close sim:", JSON.stringify(smallSimResult, null, 2).slice(0, 2000));
+
+                    if (smallSimResult.$kind === "FailedTransaction") {
+                      throw new Error(`Close position failed: ${JSON.stringify(smallSimResult.FailedTransaction)}`);
+                    }
+
+                    const smallCmds = (smallSimResult as any).commandResults;
+                    const smallLastIdx = smallCmds.length - 1;
+                    const { baseAmount, quoteAmount } = parsePostCloseBalances(
+                      smallSimResult, smallLastIdx, position.baseSymbol, position.quoteSymbol
+                    );
+                    console.log("[ClosePosition] Post-repay balances:", { baseAmount, quoteAmount });
+
+                    const closeTx = buildSmallPositionCloseTx(
+                      client, managerKey, position.side,
+                      depositAmount,
+                      Math.max(0, baseAmount * 0.999),
+                      Math.max(0, quoteAmount * 0.999),
+                      account.address
+                    );
+
+                    await dAppKitInstance.signAndExecuteTransaction({ transaction: closeTx });
+                    console.log("[ClosePosition] Small position close complete");
+                  } else {
+                    console.error("[ClosePosition] Simulation FAILED:", simResult.FailedTransaction);
+                    throw new Error(`Close position failed: ${errorStr}`);
+                  }
+                } else {
+                  // Normal close: simulation passed
+                  // managerState is the last command (index varies because repay's
+                  // tx.object.option() can insert hidden commands that shift indices)
+                  const cmds = (simResult as any).commandResults;
+                  const lastCmdIndex = cmds.length - 1;
+                  const { baseAmount, quoteAmount } = parsePostCloseBalances(
+                    simResult, lastCmdIndex, position.baseSymbol, position.quoteSymbol
+                  );
+                  console.log("[ClosePosition] Post-close balances from sim:", { baseAmount, quoteAmount });
+
+                  // Small buffer (0.1%) to avoid over-withdrawal if price moves slightly
+                  const safeBase = Math.max(0, baseAmount * 0.999);
+                  const safeQuote = Math.max(0, quoteAmount * 0.999);
+
+                  // Build and execute the full close TX (one wallet prompt)
+                  const fullCloseTx = buildFullClosePositionTx(
+                    client, managerKey, position.poolKey,
+                    position.side, orderQuantity, false,
+                    safeBase, safeQuote, account.address
+                  );
+
+                  await dAppKitInstance.signAndExecuteTransaction({ transaction: fullCloseTx });
+                  console.log("[ClosePosition] Full close complete (single TX)");
                 }
 
-                await dAppKitInstance.signAndExecuteTransaction({ transaction: closeTx });
-                console.log("[ClosePosition] Sell + settle + repay done");
-              } else if (position.quoteDebt > 0 || position.baseDebt > 0) {
-                // No base to sell — just repay debt directly
-                setTxStage({ step: 1, total: 2, label: "Repaying debt" });
+              } else if (hasAssets) {
+                // === NO DEBT (1x leverage): just withdraw all assets directly ===
+                setTxStage({ step: 1, total: 1, label: "Withdrawing funds" });
 
-                const repayTx = buildRepayTx(client, managerKey, position.side);
-                await dAppKitInstance.signAndExecuteTransaction({ transaction: repayTx });
-                console.log("[ClosePosition] Debt repaid (no sell needed)");
-              }
-
-              // === TX2: Withdraw all remaining assets ===
-              // Re-query manager state to get accurate post-close balances
-              setTxStage({ step: 2, total: 2, label: "Withdrawing funds" });
-
-              let baseToWithdraw = 0;
-              let quoteToWithdraw = 0;
-              try {
-                const freshState = await queryManagerBalances(
-                  client, suiClient, account.address,
-                  position.poolKey, position.managerAddress,
-                  position.baseSymbol, position.quoteSymbol
-                );
-                baseToWithdraw = freshState.baseAsset;
-                quoteToWithdraw = freshState.quoteAsset;
-                console.log("[ClosePosition] Post-close balances:", freshState);
-              } catch (queryErr) {
-                console.warn("[ClosePosition] Failed to re-query, using original values:", queryErr);
-                baseToWithdraw = position.baseAsset;
-                quoteToWithdraw = position.quoteAsset;
-              }
-
-              if (baseToWithdraw > 0 || quoteToWithdraw > 0) {
-                const withdrawTx = buildWithdrawAllRemainingTx(
-                  client, managerKey, position.baseSymbol,
-                  baseToWithdraw, quoteToWithdraw
+                const withdrawTx = buildWithdrawOnlyTx(
+                  client, managerKey,
+                  position.baseAsset, position.quoteAsset,
+                  account.address
                 );
 
                 await dAppKitInstance.signAndExecuteTransaction({ transaction: withdrawTx });
-                console.log("[ClosePosition] Withdrawal complete");
-              } else {
-                console.log("[ClosePosition] No remaining assets to withdraw");
+                console.log("[ClosePosition] Withdraw-only complete (no debt)");
               }
 
               setTxStage(null);
@@ -795,19 +829,9 @@ const ClosePopover = dynamic(
 
                   {/* Stage progress */}
                   {isSubmitting && txStage && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">
-                          Step {txStage.step} of {txStage.total}
-                        </span>
-                        <span className="text-foreground font-medium">{txStage.label}</span>
-                      </div>
-                      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-rose-500 transition-all duration-500"
-                          style={{ width: `${(txStage.step / txStage.total) * 100}%` }}
-                        />
-                      </div>
+                    <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>{txStage.label}</span>
                     </div>
                   )}
 

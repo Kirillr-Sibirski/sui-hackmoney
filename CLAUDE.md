@@ -56,6 +56,5 @@ npx shadcn@latest add <component-name>
 Components will be added to `components/ui/` with RSC support enabled.
 
 <!-- ## Prompt Sequence
-5/ Why can we not implement the closure of the position in 1 TX?
-
+1/ Remove the duplicate sign when closing the position
  -->
