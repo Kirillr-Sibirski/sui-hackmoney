@@ -17,6 +17,41 @@ function generateClientOrderId(): string {
 }
 
 /**
+ * Extract a created object ID from a transaction result by matching a type substring.
+ * Requires `include: { effects: true, objectTypes: true }` when fetching.
+ */
+function extractCreatedObjectAddress(
+  result: {
+    $kind: string;
+    Transaction?: {
+      objectTypes?: Record<string, string>;
+      effects?: {
+        changedObjects?: Array<{
+          objectId: string;
+          idOperation: string;
+        }>;
+      };
+    };
+  },
+  typeSubstring: string
+): string | null {
+  if (result.$kind === "FailedTransaction" || !result.Transaction) {
+    return null;
+  }
+
+  const objectTypes = result.Transaction.objectTypes ?? {};
+  const changedObjects = result.Transaction.effects?.changedObjects ?? [];
+
+  const obj = changedObjects.find(
+    (o) =>
+      o.idOperation === "Created" &&
+      objectTypes[o.objectId]?.includes(typeSubstring)
+  );
+
+  return obj?.objectId ?? null;
+}
+
+/**
  * Extract the MarginManager object ID from a transaction result.
  * Requires `include: { effects: true, objectTypes: true }` when fetching.
  */
@@ -34,20 +69,28 @@ export function extractMarginManagerAddress(
     };
   }
 ): string | null {
-  if (result.$kind === "FailedTransaction" || !result.Transaction) {
-    return null;
+  return extractCreatedObjectAddress(result, "MarginManager");
+}
+
+/**
+ * Extract a created Referral object ID from a transaction result.
+ * Requires `include: { effects: true, objectTypes: true }` when fetching.
+ */
+export function extractReferralAddress(
+  result: {
+    $kind: string;
+    Transaction?: {
+      objectTypes?: Record<string, string>;
+      effects?: {
+        changedObjects?: Array<{
+          objectId: string;
+          idOperation: string;
+        }>;
+      };
+    };
   }
-
-  const objectTypes = result.Transaction.objectTypes ?? {};
-  const changedObjects = result.Transaction.effects?.changedObjects ?? [];
-
-  const managerObj = changedObjects.find(
-    (obj) =>
-      obj.idOperation === "Created" &&
-      objectTypes[obj.objectId]?.includes("MarginManager")
-  );
-
-  return managerObj?.objectId ?? null;
+): string | null {
+  return extractCreatedObjectAddress(result, "Referral");
 }
 
 /**
@@ -117,9 +160,16 @@ export function buildBorrowAndOrderTx(
   side: "long" | "short",
   borrowAmount: number,
   orderQuantity: number,
-  payWithDeep: boolean
+  payWithDeep: boolean,
+  referralId?: string
 ): Transaction {
   const tx = new Transaction();
+
+  // Step 0: Set referral if provided (earns fee share for the referral owner)
+  if (referralId) {
+    client.marginManager.setMarginManagerReferral(managerKey, referralId)(tx);
+    console.log("[buildBorrowAndOrderTx] Set referral:", referralId);
+  }
 
   // Step 1: Borrow (skip if fully collateralized)
   console.log("borrowing the asset... the manager key is", managerKey)

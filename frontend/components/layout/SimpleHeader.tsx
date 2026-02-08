@@ -2,9 +2,42 @@
 
 import { Button } from "@/components/ui/button";
 import { ConnectWalletButton } from "@/components/wallet/ConnectWalletButton";
-import { LayoutDashboard, TrendingUp } from "lucide-react";
+import { LayoutDashboard, TrendingUp, Shield } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import dynamic from "next/dynamic";
+import { isAdmin } from "@/lib/admin";
+
+const AdminLink = dynamic(
+  () =>
+    import("@mysten/dapp-kit-react").then((dappKit) => {
+      const { useCurrentAccount } = dappKit;
+      return function AdminLinkInner() {
+        const account = useCurrentAccount();
+        if (!isAdmin(account?.address)) return null;
+        return (
+          <AdminButton />
+        );
+      };
+    }),
+  { ssr: false }
+);
+
+function AdminButton() {
+  const pathname = usePathname();
+  return (
+    <Button
+      variant={pathname === "/admin" ? "secondary" : "ghost"}
+      size="sm"
+      asChild
+    >
+      <Link href="/admin" className="gap-1.5">
+        <Shield className="w-4 h-4" />
+        Admin
+      </Link>
+    </Button>
+  );
+}
 
 export function SimpleHeader() {
   const pathname = usePathname();
@@ -42,6 +75,7 @@ export function SimpleHeader() {
               Dashboard
             </Link>
           </Button>
+          <AdminLink />
         </nav>
       </div>
       <div className="flex items-center gap-3">

@@ -27,6 +27,7 @@ import pools from "@/config/pools.json";
 import coins from "@/config/coins.json";
 import charts from "@/config/charts.json";
 import marginPoolsData from "@/config/margin_pools.json";
+import referralsConfig from "@/config/referrals.json";
 
 const marginPoolsConfig = marginPoolsData.marginPools as Record<string, { minBorrow: number }>;
 import { CoinIcon, PoolPairIcon } from "@/components/ui/coin-icon";
@@ -338,6 +339,7 @@ const TradeCardInner = dynamic(
                 // === TX2: Borrow + market order ===
                 setTxStage({ step: 3, total: 3, label: "Opening position" });
 
+                const referralId = (referralsConfig.referrals as Record<string, string | null>)[selectedPool] ?? undefined;
                 const orderTx = buildBorrowAndOrderTx(
                   clientWithManagers,
                   managerKey,
@@ -345,7 +347,8 @@ const TradeCardInner = dynamic(
                   side,
                   borrowAmount,
                   orderQuantity,
-                  payWithDeep
+                  payWithDeep,
+                  referralId
                 );
 
                 // Dry run first to get detailed error
@@ -428,6 +431,7 @@ const TradeCardInner = dynamic(
                 setIsSubmitting(true);
                 setTxStage({ step: 3, total: 3, label: "Opening position" });
 
+                const resumeReferralId = (referralsConfig.referrals as Record<string, string | null>)[selectedPool] ?? undefined;
                 const orderTx = buildBorrowAndOrderTx(
                   clientWithManagers,
                   managerKey,
@@ -435,7 +439,8 @@ const TradeCardInner = dynamic(
                   side,
                   borrowAmount,
                   orderQuantity,
-                  payWithDeep
+                  payWithDeep,
+                  resumeReferralId
                 );
 
                 await dAppKitInstance.signAndExecuteTransaction({
