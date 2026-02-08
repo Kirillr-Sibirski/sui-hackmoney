@@ -23,6 +23,7 @@ import { removePosition } from "@/lib/positions";
 import { usePrices } from "@/hooks/use-prices";
 import Link from "next/link";
 import type { OnChainPosition } from "@/hooks/use-positions";
+import poolsConfig from "@/config/pools.json";
 
 /**
  * Dashboard inner component — loaded dynamically for dapp-kit hooks.
@@ -643,11 +644,13 @@ const ClosePopover = dynamic(
               });
 
               // Long → sell all base (with small buffer to avoid stale over-sell)
-              // Short → buy back base debt
+              // Short → buy back base debt (at least minOrderSize to avoid EOrderBelowMinimumSize)
+              const poolCfg = poolsConfig.pools.find((p) => p.id === position.poolKey);
+              const minOrderSize = poolCfg?.minOrderSize ?? 1;
               const orderQuantity =
                 position.side === "long"
                   ? position.baseAsset * 0.999
-                  : position.baseDebt;
+                  : Math.max(position.baseDebt, minOrderSize);
 
               const hasDebt = position.quoteDebt > 0.0001 || position.baseDebt > 0.0001;
               const hasAssets = position.baseAsset > 0.0001 || position.quoteAsset > 0.0001;

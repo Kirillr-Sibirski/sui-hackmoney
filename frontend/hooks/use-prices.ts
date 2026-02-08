@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   fetchPrices,
   subscribeToPrices,
@@ -20,6 +20,10 @@ export function usePrices() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  // Keep a ref that always points to the latest prices — callbacks read from
+  // here so their identity never changes, preventing cascading re-renders.
+  const pricesRef = useRef(prices);
+  pricesRef.current = prices;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -64,20 +68,20 @@ export function usePrices() {
     };
   }, []);
 
-  /** Get USD price for a symbol */
+  /** Get USD price for a symbol — stable identity, reads from ref */
   const getUsdPrice = useCallback(
     (symbol: string): number => {
-      return prices[symbol]?.price ?? 0;
+      return pricesRef.current[symbol]?.price ?? 0;
     },
-    [prices]
+    []
   );
 
-  /** Get price of base in terms of quote (e.g., SUI/USDC, DEEP/SUI) */
+  /** Get price of base in terms of quote — stable identity, reads from ref */
   const getPairPrice = useCallback(
     (baseSymbol: string, quoteSymbol: string): number => {
-      return getQuotePrice(baseSymbol, quoteSymbol, prices);
+      return getQuotePrice(baseSymbol, quoteSymbol, pricesRef.current);
     },
-    [prices]
+    []
   );
 
   return { prices, isLoading, error, getUsdPrice, getPairPrice };

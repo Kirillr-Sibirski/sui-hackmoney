@@ -6,7 +6,7 @@
       "baseAsset": "SUI",
       "quoteAsset": "USDC",
       "maxLeverage": 5,
-      "minOrderSize": 1,
+      "minOrderSize": 0.1,
       "tickSize": 0.0001
     },
     {
@@ -24,7 +24,7 @@
       "baseAsset": "DEEP",
       "quoteAsset": "USDC",
       "maxLeverage": 3,
-      "minOrderSize": 100,
+      "minOrderSize": 10,
       "tickSize": 0.000001
     }
   ],

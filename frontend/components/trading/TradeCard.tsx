@@ -117,7 +117,7 @@ const TradeCardInner = dynamic(
             // Interest rate for the borrowed asset (long → borrow quote, short → borrow base)
             const borrowedAssetForRate = side === "long" ? quoteAsset : baseAsset;
             const interestRate = interestRates[borrowedAssetForRate] ?? 0;
-            const maxLeverage = getMaxLeverage(selectedPool);
+            const maxLeverage = getMaxLeverage(selectedPool, side);
 
             // Each position is fully isolated — new manager per trade
 
@@ -157,19 +157,29 @@ const TradeCardInner = dynamic(
               setCollateralManuallyEdited(false);
             }, [amount, selectedPool, collateral]);
 
-            // Auto-fill collateral to match selected leverage
-            // Amount = total position size, so: collateral = amount * basePrice / leverage / collateralPrice
+            // Clamp leverage when switching sides (short has lower max than long)
+            useEffect(() => {
+              if (leverage[0] > maxLeverage) {
+                setLeverage([maxLeverage]);
+              }
+            }, [side, maxLeverage]);
+
+            // Auto-fill collateral to match selected leverage.
+            // Only triggers on user-driven changes (amount, leverage, pool, collateral asset),
+            // NOT on price ticks — getUsdPrice is stable (ref-based) so it won't re-trigger.
             useEffect(() => {
               if (collateralManuallyEdited) return;
               const amtNum = parseFloat(amount) || 0;
               const lev = leverage[0];
-              if (amtNum <= 0 || basePrice <= 0 || lev <= 0) {
+              const bp = getUsdPrice(baseAsset);
+              if (amtNum <= 0 || bp <= 0 || lev <= 0) {
                 setCollateralAmount("");
                 return;
               }
               const collateralAssetPrice = getUsdPrice(collateral);
               if (collateralAssetPrice <= 0) return;
-              const targetCollateral = (amtNum * basePrice) / (lev * collateralAssetPrice);
+              // 2% buffer so we stay safely above minBorrowRiskRatio (oracle price diffs, rounding)
+              const targetCollateral = (amtNum * bp) / (lev * collateralAssetPrice) * 1.02;
               setCollateralAmount(
                 targetCollateral < 0.01
                   ? targetCollateral.toPrecision(3)
@@ -177,7 +187,8 @@ const TradeCardInner = dynamic(
                     ? targetCollateral.toFixed(4)
                     : targetCollateral.toFixed(2)
               );
-            }, [amount, leverage, basePrice, collateral, getUsdPrice, collateralManuallyEdited]);
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [amount, leverage, baseAsset, collateral, collateralManuallyEdited]);
 
             // Base client (no managers) for creating new managers
             const baseClient = useMemo(() => {
@@ -213,9 +224,8 @@ const TradeCardInner = dynamic(
               const borrowUsdRaw = exposureUsd - collateralUsd;
 
               // Convert borrow to the actual borrowed asset amount.
-              // Long → borrow quote (need quote to buy base)
-              // Short → borrow base (need base to sell)
-              // Add 0.5% buffer for taker fees
+              // Long → borrow quote (need quote to buy base), add 0.5% fee buffer (bid fee on quote)
+              // Short → borrow base (need base to sell), NO fee buffer (ask fee comes from quote proceeds)
               const FEE_BUFFER = 1.005;
               let borrowAmount: number;
               if (borrowUsdRaw <= 0 && side === "long") {
@@ -230,12 +240,12 @@ const TradeCardInner = dynamic(
                   borrowAmount = quotePrice > 0 ? (borrowUsdRaw / quotePrice) * FEE_BUFFER : 0;
                 }
               } else {
-                // Short: need base = orderQuantity to sell. Collateral in base reduces this.
+                // Short: need base = orderQuantity to sell. No fee buffer needed.
                 if (collateral === baseAsset) {
-                  borrowAmount = Math.max(0, (orderQuantity - collateralNum) * FEE_BUFFER);
+                  borrowAmount = Math.max(0, orderQuantity - collateralNum);
                 } else {
                   // Collateral is quote/DEEP — need to borrow all the base to sell
-                  borrowAmount = orderQuantity * FEE_BUFFER;
+                  borrowAmount = orderQuantity;
                 }
               }
 
@@ -397,7 +407,7 @@ const TradeCardInner = dynamic(
                   referralId
                 );
 
-                // Dry run first to get detailed error
+                // Dry run first to get detailed error (simulation freezes the TX object)
                 try {
                   orderTx.setSender(account.address);
                   const dryRunResult = await suiClient.core.simulateTransaction({
@@ -414,8 +424,20 @@ const TradeCardInner = dynamic(
                   throw dryErr;
                 }
 
+                // Build a FRESH TX for signing — simulation freezes the TX object
+                const signTx = buildBorrowAndOrderTx(
+                  clientWithManagers,
+                  managerKey,
+                  selectedPool,
+                  side,
+                  borrowAmount,
+                  orderQuantity,
+                  payWithDeep,
+                  referralId
+                );
+
                 await dAppKitInstance.signAndExecuteTransaction({
-                  transaction: orderTx,
+                  transaction: signTx,
                 });
 
                 setTxStage(null);
@@ -553,6 +575,7 @@ const TradeCardInner = dynamic(
             const estimatedBorrowAmount = borrowedAssetPrice > 0 ? displayBorrowUsd / borrowedAssetPrice : 0;
             const isBelowMinBorrow = displayBorrowUsd > 0 && estimatedBorrowAmount < minBorrowForAsset;
 
+            const isBelowMinOrder = amountNum > 0 && amountNum < pool.minOrderSize;
             const isComplete = amountNum > 0 && collateralNum > 0;
             const liqRiskRatio = getLiquidationRiskRatio(selectedPool);
 
@@ -653,10 +676,15 @@ const TradeCardInner = dynamic(
                     <Label>Amount ({baseAsset})</Label>
                     <Input
                       type="number"
-                      placeholder="0.00"
+                      placeholder={`Min ${pool.minOrderSize}`}
                       value={amount}
                       onChange={(e) => setAmount(e.target.value)}
                     />
+                    {isBelowMinOrder && (
+                      <p className="text-xs text-rose-500">
+                        Minimum order size is {pool.minOrderSize} {baseAsset}
+                      </p>
+                    )}
                   </div>
 
                   {/* Leverage */}
@@ -973,7 +1001,7 @@ const TradeCardInner = dynamic(
                   <Button
                     className="w-full"
                     onClick={handleOpenPosition}
-                    disabled={isSubmitting || !isComplete || isBelowMin || isBelowMinBorrow || insufficientBalance || !account}
+                    disabled={isSubmitting || !isComplete || isBelowMin || isBelowMinBorrow || isBelowMinOrder || insufficientBalance || !account}
                   >
                     {isSubmitting && txStage ? (
                       <>

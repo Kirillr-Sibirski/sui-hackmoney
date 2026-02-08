@@ -39,13 +39,15 @@ export function calculateModifiedRiskRatio(
 
 /**
  * Max leverage from minBorrowRiskRatio.
- * Formula: maxLeverage = 1 / (1 - 1/minBorrowRiskRatio)
+ * Long:  maxLeverage = R / (R - 1)  (exposure = assets)
+ * Short: maxLeverage = 1 / (R - 1)  (exposure = debt)
  */
-export function getMaxLeverage(poolId: string): number {
+export function getMaxLeverage(poolId: string, side: "long" | "short" = "long"): number {
   const params = riskParams[poolId];
   if (!params) return 5;
   const r = params.minBorrowRiskRatio;
-  return Math.floor((1 / (1 - 1 / r)) * 10) / 10;
+  const raw = side === "long" ? r / (r - 1) : 1 / (r - 1);
+  return Math.floor(raw * 10) / 10;
 }
 
 /** Get minBorrowRiskRatio for a pool */
