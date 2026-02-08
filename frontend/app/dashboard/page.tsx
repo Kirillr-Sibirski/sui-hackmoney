@@ -172,9 +172,13 @@ const DashboardInner = dynamic(
                             <div className="flex items-center justify-between mb-4">
                               <div className="flex items-center gap-3">
                                 <span
-                                  className="px-2 py-1 rounded text-xs font-medium bg-emerald-500/20 text-emerald-500"
+                                  className={`px-2 py-1 rounded text-xs font-medium ${
+                                    position.side === "long"
+                                      ? "bg-emerald-500/20 text-emerald-500"
+                                      : "bg-rose-500/20 text-rose-500"
+                                  }`}
                                 >
-                                  Long
+                                  {position.side === "long" ? "Long" : "Short"}
                                 </span>
                                 <PoolPairIcon
                                   baseSymbol={position.baseSymbol}
@@ -391,7 +395,8 @@ const ModifyPopover = dynamic(
                   managerKey,
                   position.baseSymbol,
                   collateralDisplay.symbol,
-                  amountNum
+                  amountNum,
+                  account.address
                 );
               }
 
@@ -580,6 +585,8 @@ const ClosePopover = dynamic(
           buildSmallCloseSimulationTx,
           buildSmallPositionCloseTx,
           parsePostCloseBalances,
+          buildRepayWithdrawSimulationTx,
+          buildRepayWithdrawTx,
           buildWithdrawOnlyTx,
           createClientWithManagers,
           formatTxError,
@@ -735,13 +742,56 @@ const ClosePopover = dynamic(
                   console.log("[ClosePosition] Full close complete (single TX)");
                 }
 
+              } else if (hasDebt && hasAssets) {
+                // === HAS DEBT BUT NOTHING TO SELL: repay from existing assets + withdraw ===
+                setTxStage({ step: 1, total: 1, label: "Repaying debt & withdrawing funds" });
+
+                const hasQuoteDebt = position.quoteDebt > 0.0001;
+                const hasBaseDebt = position.baseDebt > 0.0001;
+
+                // Simulate repay + managerState to get exact post-repay balances
+                const simTx = buildRepayWithdrawSimulationTx(
+                  client, managerKey, position.poolKey, position.managerAddress,
+                  hasQuoteDebt, hasBaseDebt
+                );
+                simTx.setSender(account.address);
+                const simResult = await suiClient.core.simulateTransaction({
+                  transaction: simTx,
+                  include: { commandResults: true, effects: true },
+                });
+                console.log("[ClosePosition] Repay+withdraw sim:", JSON.stringify(simResult, null, 2).slice(0, 2000));
+
+                if (simResult.$kind === "FailedTransaction") {
+                  throw new Error(`Close simulation failed: ${JSON.stringify(simResult.FailedTransaction)}`);
+                }
+
+                const cmds = (simResult as any).commandResults;
+                const lastCmdIndex = cmds.length - 1;
+                const { baseAmount, quoteAmount } = parsePostCloseBalances(
+                  simResult, lastCmdIndex, position.baseSymbol, position.quoteSymbol
+                );
+                console.log("[ClosePosition] Post-repay balances:", { baseAmount, quoteAmount });
+
+                const safeBase = Math.max(0, baseAmount * 0.999);
+                const safeQuote = Math.max(0, quoteAmount * 0.999);
+
+                const closeTx = buildRepayWithdrawTx(
+                  client, managerKey,
+                  hasQuoteDebt, hasBaseDebt,
+                  safeBase, safeQuote,
+                  account.address
+                );
+
+                await dAppKitInstance.signAndExecuteTransaction({ transaction: closeTx });
+                console.log("[ClosePosition] Repay+withdraw complete");
               } else if (hasAssets) {
-                // === NO DEBT (1x leverage): just withdraw all assets directly ===
+                // === TRULY NO DEBT: just withdraw all assets ===
                 setTxStage({ step: 1, total: 1, label: "Withdrawing funds" });
 
                 const withdrawTx = buildWithdrawOnlyTx(
                   client, managerKey,
-                  position.baseAsset, position.quoteAsset,
+                  position.baseAsset * 0.999,
+                  position.quoteAsset * 0.999,
                   account.address
                 );
 

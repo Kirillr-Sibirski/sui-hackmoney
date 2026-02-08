@@ -234,17 +234,21 @@ export function buildWithdrawTx(
   managerKey: string,
   baseAsset: string,
   collateralSymbol: string,
-  amount: number
+  amount: number,
+  senderAddress: string
 ): Transaction {
   const tx = new Transaction();
 
+  let coin;
   if (collateralSymbol === "DEEP") {
-    client.marginManager.withdrawDeep(managerKey, amount)(tx);
+    coin = client.marginManager.withdrawDeep(managerKey, amount)(tx);
   } else if (collateralSymbol === baseAsset) {
-    client.marginManager.withdrawBase(managerKey, amount)(tx);
+    coin = client.marginManager.withdrawBase(managerKey, amount)(tx);
   } else {
-    client.marginManager.withdrawQuote(managerKey, amount)(tx);
+    coin = client.marginManager.withdrawQuote(managerKey, amount)(tx);
   }
+
+  tx.transferObjects([coin], senderAddress);
 
   return tx;
 }
@@ -405,9 +409,69 @@ export function buildFullClosePositionTx(
 }
 
 /**
- * Build a TX to withdraw all assets from a margin manager (no sell, no repay).
- * Used for 1x positions that have no debt — just need to pull collateral out.
- * Properly transfers returned Coin objects to the sender.
+ * Build a simulation TX for closing with repay + withdraw:
+ * repay existing debt → query resulting manager state.
+ *
+ * IMPORTANT: Only call repayQuote/repayBase for debt that actually exists.
+ * Calling repay on a debt type with zero balance aborts with EIncorrectMarginPool (code 10).
+ */
+export function buildRepayWithdrawSimulationTx(
+  client: DeepBookClient,
+  managerKey: string,
+  poolKey: string,
+  managerAddress: string,
+  hasQuoteDebt: boolean,
+  hasBaseDebt: boolean
+): Transaction {
+  const tx = new Transaction();
+
+  if (hasQuoteDebt) client.marginManager.repayQuote(managerKey)(tx);
+  if (hasBaseDebt) client.marginManager.repayBase(managerKey)(tx);
+
+  client.marginManager.managerState(poolKey, managerAddress)(tx);
+
+  return tx;
+}
+
+/**
+ * Build a TX to repay debt + withdraw all assets from a margin manager.
+ * Only repays debt types that actually exist (calling repay on zero debt aborts).
+ * Transfers returned Coin objects to the sender.
+ */
+export function buildRepayWithdrawTx(
+  client: DeepBookClient,
+  managerKey: string,
+  hasQuoteDebt: boolean,
+  hasBaseDebt: boolean,
+  baseAmount: number,
+  quoteAmount: number,
+  senderAddress: string
+): Transaction {
+  const tx = new Transaction();
+
+  if (hasQuoteDebt) client.marginManager.repayQuote(managerKey)(tx);
+  if (hasBaseDebt) client.marginManager.repayBase(managerKey)(tx);
+
+  const coinsToTransfer: any[] = [];
+  if (baseAmount > 0) {
+    const baseCoin = client.marginManager.withdrawBase(managerKey, baseAmount)(tx);
+    coinsToTransfer.push(baseCoin);
+  }
+  if (quoteAmount > 0) {
+    const quoteCoin = client.marginManager.withdrawQuote(managerKey, quoteAmount)(tx);
+    coinsToTransfer.push(quoteCoin);
+  }
+
+  if (coinsToTransfer.length > 0) {
+    tx.transferObjects(coinsToTransfer, senderAddress);
+  }
+
+  return tx;
+}
+
+/**
+ * Build a TX to withdraw all assets from a margin manager (truly no debt).
+ * Transfers returned Coin objects to the sender.
  */
 export function buildWithdrawOnlyTx(
   client: DeepBookClient,
