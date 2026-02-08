@@ -146,10 +146,13 @@ const DashboardInner = dynamic(
                               : basePrice * (2 - liqFactor);
                         }
 
-                        // Derive leverage from on-chain risk ratio (uses Pyth oracle prices)
-                        // riskRatio = totalAssets / totalDebt, leverage = R / (R - 1)
+                        // Derive leverage from on-chain risk ratio (R = totalAssets / totalDebt)
+                        // Long: leverage = R / (R - 1)  (exposure = assets)
+                        // Short: leverage = 1 / (R - 1) (exposure = debt)
                         const leverage = position.riskRatio > 1 && hasDebt
-                          ? position.riskRatio / (position.riskRatio - 1)
+                          ? position.side === "long"
+                            ? position.riskRatio / (position.riskRatio - 1)
+                            : 1 / (position.riskRatio - 1)
                           : 1;
 
                         // Position size display: total assets in manager
@@ -494,18 +497,28 @@ const ModifyPopover = dynamic(
                           </span>
                         </div>
                       </div>
-                      <div className="flex justify-between text-xs items-center">
-                        <span className="text-muted-foreground">Safety</span>
-                        <div className="flex items-center gap-1.5 font-mono text-[11px]">
-                          <span className={getRiskColor(currentRisk)}>
-                            {getRiskLabel(currentRisk)}
-                          </span>
-                          <ArrowRight className="w-2.5 h-2.5 text-muted-foreground" />
-                          <span className={getRiskColor(newRisk)}>
-                            {getRiskLabel(newRisk)}
-                          </span>
+                      {currentRisk > 1 && currentRisk < Infinity && (
+                        <div className="flex justify-between text-xs items-center">
+                          <span className="text-muted-foreground">Leverage</span>
+                          <div className="flex items-center gap-1.5 font-mono font-medium">
+                            <span>
+                              {(position.side === "long"
+                                ? currentRisk / (currentRisk - 1)
+                                : 1 / (currentRisk - 1)
+                              ).toFixed(1)}x
+                            </span>
+                            <ArrowRight className="w-3 h-3 text-muted-foreground" />
+                            <span>
+                              {newRisk > 1
+                                ? (position.side === "long"
+                                    ? newRisk / (newRisk - 1)
+                                    : 1 / (newRisk - 1)
+                                  ).toFixed(1)
+                                : "∞"}x
+                            </span>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
 
