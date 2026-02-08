@@ -214,7 +214,7 @@ const TradeCardInner = dynamic(
               const collateralNum = parseFloat(collateralAmount) || 0;
               const leverageNum = leverage[0];
 
-              const orderQuantity = amountNum; // Amount = total position size
+              const orderQuantity = amountNum;
               const payWithDeep = collateral === "DEEP";
 
               // --- All calculations in USD ---
@@ -240,12 +240,15 @@ const TradeCardInner = dynamic(
                   borrowAmount = quotePrice > 0 ? (borrowUsdRaw / quotePrice) * FEE_BUFFER : 0;
                 }
               } else {
-                // Short: need base = orderQuantity to sell. No fee buffer needed.
+                // Short: need base = orderQuantity to sell.
+                // Borrow 0.5% extra to cover on-chain rounding (borrow may credit
+                // fractionally less than requested; the 2% collateral buffer absorbs this).
+                const SHORT_BORROW_BUFFER = 1.005;
                 if (collateral === baseAsset) {
-                  borrowAmount = Math.max(0, orderQuantity - collateralNum);
+                  borrowAmount = Math.max(0, (orderQuantity - collateralNum) * SHORT_BORROW_BUFFER);
                 } else {
                   // Collateral is quote/DEEP — need to borrow all the base to sell
-                  borrowAmount = orderQuantity;
+                  borrowAmount = orderQuantity * SHORT_BORROW_BUFFER;
                 }
               }
 

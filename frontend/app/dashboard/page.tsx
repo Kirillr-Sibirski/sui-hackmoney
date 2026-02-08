@@ -350,16 +350,25 @@ const ModifyPopover = dynamic(
           const [txStatus, setTxStatus] = useState<string | null>(null);
           const [open, setOpen] = useState(false);
 
+          // Deposit uses the original collateral asset (user's wallet asset)
+          // Withdraw uses the asset where value actually sits after the market order:
+          //   Long → base (we bought base), Short → quote (we sold base for quote)
+          const depositSymbol = collateralDisplay.symbol;
+          const withdrawSymbol = position.side === "long" ? position.baseSymbol : position.quoteSymbol;
+          const activeSymbol = action === "deposit" ? depositSymbol : withdrawSymbol;
+
           const amountNum = parseFloat(amount) || 0;
           const delta = action === "deposit" ? amountNum : -amountNum;
 
-          // Compute new risk ratio preview
+          // For risk ratio preview, convert withdraw amount to collateral-equivalent USD
+          const withdrawPrice = position.side === "long" ? position.basePythPrice : position.quotePythPrice;
+          const activePrice = action === "deposit" ? collateralPrice : withdrawPrice;
           const currentRisk = position.riskRatio;
           const newRisk =
             amountNum > 0
               ? calculateModifiedRiskRatio(
                   collateralDisplay.amount,
-                  delta,
+                  delta * (activePrice / (collateralPrice || 1)),
                   collateralPrice,
                   currentRisk
                 )
@@ -384,28 +393,44 @@ const ModifyPopover = dynamic(
                 },
               });
 
-              let tx;
-              if (action === "deposit") {
-                tx = buildDepositTx(
-                  client,
-                  managerKey,
-                  position.baseSymbol,
-                  position.quoteSymbol,
-                  collateralDisplay.symbol,
-                  amountNum
-                );
-              } else {
-                tx = buildWithdrawTx(
-                  client,
-                  managerKey,
-                  position.baseSymbol,
-                  collateralDisplay.symbol,
-                  amountNum,
-                  account.address
-                );
+              const buildTx = () => {
+                if (action === "deposit") {
+                  return buildDepositTx(
+                    client,
+                    managerKey,
+                    position.baseSymbol,
+                    position.quoteSymbol,
+                    depositSymbol,
+                    amountNum
+                  );
+                } else {
+                  // Withdraw the asset where value sits: base for longs, quote for shorts
+                  return buildWithdrawTx(
+                    client,
+                    managerKey,
+                    position.baseSymbol,
+                    withdrawSymbol,
+                    amountNum,
+                    account.address
+                  );
+                }
+              };
+
+              // Dry run first for clear error messages
+              const dryTx = buildTx();
+              dryTx.setSender(account.address);
+              const dryResult = await suiClient.core.simulateTransaction({
+                transaction: dryTx,
+                include: { effects: true },
+              });
+              if (dryResult.$kind === "FailedTransaction") {
+                console.error("[Modify] Dry run failed:", dryResult.FailedTransaction);
+                throw new Error(`Transaction would fail: ${JSON.stringify(dryResult.FailedTransaction.status?.error?.message ?? dryResult.FailedTransaction)}`);
               }
 
-              await dAppKitInstance.signAndExecuteTransaction({ transaction: tx });
+              // Build fresh TX for signing (simulation freezes the TX object)
+              const signTx = buildTx();
+              await dAppKitInstance.signAndExecuteTransaction({ transaction: signTx });
 
               setTxStatus(action === "deposit" ? "Collateral added!" : "Collateral withdrawn!");
               setAmount("");
@@ -456,7 +481,7 @@ const ModifyPopover = dynamic(
 
                   <Separator />
 
-                  <Tabs value={action} onValueChange={setAction}>
+                  <Tabs value={action} onValueChange={(v) => { setAction(v); setAmount(""); }}>
                     <TabsList className="w-full">
                       <TabsTrigger
                         value="deposit"
@@ -474,7 +499,7 @@ const ModifyPopover = dynamic(
                   </Tabs>
 
                   <div className="space-y-2">
-                    <Label className="text-xs">Amount ({collateralDisplay.symbol})</Label>
+                    <Label className="text-xs">Amount ({activeSymbol})</Label>
                     <Input
                       type="number"
                       placeholder="0.00"
