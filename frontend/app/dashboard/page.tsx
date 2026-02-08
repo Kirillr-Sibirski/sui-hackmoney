@@ -134,6 +134,7 @@ const DashboardInner = dynamic(
                         const debtUsd = debtAmount * getUsdPrice(debtAsset);
                         const basePrice = getUsdPrice(position.baseSymbol);
                         const liqRiskRatio = getLiquidationRiskRatio(position.poolKey);
+                        const hasDebt = debtAmount > 0.0001;
 
                         // Compute liquidation price
                         let liqPrice = 0;
@@ -145,9 +146,11 @@ const DashboardInner = dynamic(
                               : basePrice * (2 - liqFactor);
                         }
 
-                        // Effective leverage = position value / equity
-                        const equity = collateralUsd - debtUsd;
-                        const leverage = equity > 0 ? collateralUsd / equity : 1;
+                        // Derive leverage from on-chain risk ratio (uses Pyth oracle prices)
+                        // riskRatio = totalAssets / totalDebt, leverage = R / (R - 1)
+                        const leverage = position.riskRatio > 1 && hasDebt
+                          ? position.riskRatio / (position.riskRatio - 1)
+                          : 1;
 
                         // Position size display: total assets in manager
                         const positionDisplay =
@@ -161,8 +164,6 @@ const DashboardInner = dynamic(
                         const collateralAssetPrice = getUsdPrice(collateralAssetSymbol);
                         const equityUsd = collateralUsd - debtUsd;
                         const equityInCollateralAsset = collateralAssetPrice > 0 ? equityUsd / collateralAssetPrice : 0;
-
-                        const hasDebt = debtAmount > 0.0001;
 
                         return (
                           <div

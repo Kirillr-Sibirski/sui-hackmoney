@@ -197,16 +197,15 @@ export function buildBorrowAndOrderTx(
     }
   }
 
-  // // Step 2: Place market order
-  // client.poolProxy.placeMarketOrder({
-  //   poolKey,
-  //   marginManagerKey: managerKey,
-  //   clientOrderId: generateClientOrderId(),
-  //   quantity: orderQuantity,
-  //   isBid: side === "long",
-  //   payWithDeep,
-  // })(tx);
-  // console.log("placed market order", tx)
+  // Step 2: Place market order
+  client.poolProxy.placeMarketOrder({
+    poolKey,
+    marginManagerKey: managerKey,
+    clientOrderId: generateClientOrderId(),
+    quantity: orderQuantity,
+    isBid: side === "long",
+    payWithDeep,
+  })(tx);
 
   return tx;
 }

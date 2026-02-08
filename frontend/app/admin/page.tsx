@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { SimpleHeader } from "@/components/layout/SimpleHeader";
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,15 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { FloatingIcons } from "@/components/ui/floating-icons";
 import { SpotlightCard } from "@/components/ui/spotlight-card";
-import { Loader2, Copy, Check, Shield } from "lucide-react";
+import { CoinIcon } from "@/components/ui/coin-icon";
+import { Loader2, Copy, Check, Shield, RefreshCw } from "lucide-react";
 import { isAdmin } from "@/lib/admin";
 import pools from "@/config/pools.json";
 import referralsConfig from "@/config/referrals.json";
 
 const referrals = referralsConfig.referrals as Record<string, string | null>;
+
+type PoolBalances = { base: number; quote: number; deep: number };
 
 const AdminInner = dynamic(
   () =>
@@ -38,6 +41,46 @@ const AdminInner = dynamic(
               Record<string, { loading: boolean; result?: string; error?: string }>
             >({});
             const [copied, setCopied] = useState<string | null>(null);
+
+            // Reward balances per pool
+            const [balances, setBalances] = useState<Record<string, PoolBalances | null>>({});
+            const [balancesLoading, setBalancesLoading] = useState(false);
+
+            const fetchBalances = useCallback(async () => {
+              if (!suiClient || !account) return;
+
+              setBalancesLoading(true);
+              const client = new DeepBookClient({
+                client: suiClient,
+                network: "mainnet",
+                address: account.address,
+              });
+
+              const results: Record<string, PoolBalances | null> = {};
+              for (const pool of pools.pools) {
+                const refId = referrals[pool.id];
+                if (!refId) {
+                  results[pool.id] = null;
+                  continue;
+                }
+                try {
+                  const bal = await client.getPoolReferralBalances(pool.id, refId);
+                  results[pool.id] = bal;
+                } catch (err) {
+                  console.warn(`Failed to fetch balances for ${pool.id}:`, err);
+                  results[pool.id] = null;
+                }
+              }
+              setBalances(results);
+              setBalancesLoading(false);
+            }, [suiClient, account]);
+
+            // Auto-fetch balances on mount
+            useEffect(() => {
+              if (account && isAdmin(account.address)) {
+                fetchBalances();
+              }
+            }, [account, fetchBalances]);
 
             if (!account) {
               return (
@@ -69,7 +112,7 @@ const AdminInner = dynamic(
               if (multiplier < 0.1 || multiplier > 2.0) {
                 setMintStates((s) => ({
                   ...s,
-                  [poolId]: { loading: false, error: "Multiplier must be 0.1–2.0" },
+                  [poolId]: { loading: false, error: "Multiplier must be 0.1-2.0" },
                 }));
                 return;
               }
@@ -101,7 +144,7 @@ const AdminInner = dynamic(
                   ...s,
                   [poolId]: {
                     loading: false,
-                    result: referralAddr ?? "Minted (could not extract ID — check explorer)",
+                    result: referralAddr ?? "Minted (could not extract ID \u2014 check explorer)",
                   },
                 }));
               } catch (err: any) {
@@ -143,6 +186,9 @@ const AdminInner = dynamic(
                   ...s,
                   [poolId]: { loading: false, result: "Rewards claimed!" },
                 }));
+
+                // Refresh balances after claim
+                fetchBalances();
               } catch (err: any) {
                 console.error("Claim rewards failed:", err);
                 setClaimStates((s) => ({
@@ -158,12 +204,121 @@ const AdminInner = dynamic(
               setTimeout(() => setCopied(null), 2000);
             };
 
+            const formatAmount = (amount: number) => {
+              if (amount === 0) return "0";
+              if (amount < 0.000001) return amount.toExponential(2);
+              if (amount < 0.01) return amount.toPrecision(3);
+              if (amount < 1) return amount.toFixed(4);
+              return amount.toFixed(4);
+            };
+
+            const activeReferralPools = pools.pools.filter((pool) => referrals[pool.id]);
+
             return (
               <main className="relative z-10 max-w-3xl mx-auto px-8 lg:px-16 py-8">
                 <div className="mb-8">
                   <h1 className="text-2xl font-bold">Admin</h1>
                   <p className="text-muted-foreground">Manage referrals and claim rewards</p>
                 </div>
+
+                {/* Referral Rewards Overview */}
+                {activeReferralPools.length > 0 && (
+                  <SpotlightCard className="mb-8 p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-lg font-semibold">Referral Rewards</h2>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={fetchBalances}
+                        disabled={balancesLoading}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${balancesLoading ? "animate-spin" : ""}`} />
+                        Refresh
+                      </Button>
+                    </div>
+
+                    <div className="space-y-4">
+                      {activeReferralPools.map((pool) => {
+                        const bal = balances[pool.id];
+                        const claimState = claimStates[pool.id];
+                        const hasRewards = bal && (bal.base > 0 || bal.quote > 0 || bal.deep > 0);
+
+                        return (
+                          <div key={pool.id} className="border rounded-lg p-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium">{pool.name}</span>
+                              <Button
+                                size="sm"
+                                onClick={() => handleClaim(pool.id)}
+                                disabled={claimState?.loading || !hasRewards}
+                              >
+                                {claimState?.loading ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                                    Claiming...
+                                  </>
+                                ) : (
+                                  "Claim Rewards"
+                                )}
+                              </Button>
+                            </div>
+
+                            {bal ? (
+                              <div className="grid grid-cols-3 gap-3">
+                                <div className="rounded-md bg-muted/50 px-3 py-2">
+                                  <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1.5">
+                                    <CoinIcon symbol={pool.baseAsset} size={12} />
+                                    {pool.baseAsset}
+                                  </p>
+                                  <p className={`font-mono text-sm font-medium ${bal.base > 0 ? "text-emerald-500" : ""}`}>
+                                    {formatAmount(bal.base)}
+                                  </p>
+                                </div>
+                                <div className="rounded-md bg-muted/50 px-3 py-2">
+                                  <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1.5">
+                                    <CoinIcon symbol={pool.quoteAsset} size={12} />
+                                    {pool.quoteAsset}
+                                  </p>
+                                  <p className={`font-mono text-sm font-medium ${bal.quote > 0 ? "text-emerald-500" : ""}`}>
+                                    {formatAmount(bal.quote)}
+                                  </p>
+                                </div>
+                                <div className="rounded-md bg-muted/50 px-3 py-2">
+                                  <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1.5">
+                                    <CoinIcon symbol="DEEP" size={12} />
+                                    DEEP
+                                  </p>
+                                  <p className={`font-mono text-sm font-medium ${bal.deep > 0 ? "text-emerald-500" : ""}`}>
+                                    {formatAmount(bal.deep)}
+                                  </p>
+                                </div>
+                              </div>
+                            ) : balancesLoading ? (
+                              <div className="grid grid-cols-3 gap-3">
+                                {[0, 1, 2].map((i) => (
+                                  <div key={i} className="rounded-md bg-muted/50 px-3 py-2">
+                                    <div className="h-3 w-12 rounded bg-muted animate-pulse mb-2" />
+                                    <div className="h-4 w-16 rounded bg-muted animate-pulse" />
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">Failed to load balances</p>
+                            )}
+
+                            {claimState?.result && (
+                              <p className="text-xs text-emerald-500">{claimState.result}</p>
+                            )}
+                            {claimState?.error && (
+                              <p className="text-xs text-rose-500">{claimState.error}</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </SpotlightCard>
+                )}
 
                 {/* Mint Referrals */}
                 <SpotlightCard className="mb-8 p-6">
@@ -210,7 +365,7 @@ const AdminInner = dynamic(
 
                           <div className="flex items-end gap-3">
                             <div className="space-y-1.5 flex-1">
-                              <Label className="text-xs">Multiplier (0.1–2.0)</Label>
+                              <Label className="text-xs">Multiplier (0.1-2.0)</Label>
                               <Input
                                 type="number"
                                 step="0.1"
@@ -267,54 +422,6 @@ const AdminInner = dynamic(
                         </div>
                       );
                     })}
-                  </div>
-                </SpotlightCard>
-
-                {/* Claim Rewards */}
-                <SpotlightCard className="p-6">
-                  <h2 className="text-lg font-semibold mb-4">Claim Referral Rewards</h2>
-                  <p className="text-sm text-muted-foreground mb-6">
-                    Claim accumulated taker fee rewards for each pool referral.
-                  </p>
-
-                  <div className="space-y-4">
-                    {pools.pools
-                      .filter((pool) => referrals[pool.id])
-                      .map((pool) => {
-                        const state = claimStates[pool.id];
-                        return (
-                          <div key={pool.id} className="border rounded-lg p-4">
-                            <div className="flex items-center justify-between">
-                              <span className="font-medium">{pool.name}</span>
-                              <Button
-                                size="sm"
-                                onClick={() => handleClaim(pool.id)}
-                                disabled={state?.loading}
-                              >
-                                {state?.loading ? (
-                                  <>
-                                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                                    Claiming...
-                                  </>
-                                ) : (
-                                  "Claim Rewards"
-                                )}
-                              </Button>
-                            </div>
-                            {state?.result && (
-                              <p className="text-xs text-emerald-500 mt-2">{state.result}</p>
-                            )}
-                            {state?.error && (
-                              <p className="text-xs text-rose-500 mt-2">{state.error}</p>
-                            )}
-                          </div>
-                        );
-                      })}
-                    {pools.pools.filter((pool) => referrals[pool.id]).length === 0 && (
-                      <p className="text-sm text-muted-foreground text-center py-8">
-                        No referrals configured. Mint referrals above, then update <code className="text-xs bg-muted px-1 py-0.5 rounded">referrals.json</code>.
-                      </p>
-                    )}
                   </div>
                 </SpotlightCard>
               </main>

@@ -80,6 +80,7 @@ const TradeCardInner = dynamic(
             const [amount, setAmount] = useState("");
             const [collateral, setCollateral] = useState("USDC");
             const [collateralAmount, setCollateralAmount] = useState("");
+            const [collateralManuallyEdited, setCollateralManuallyEdited] = useState(false);
 
             // Stores all created margin managers: unique key → { address, poolKey }
             const [marginManagers, setMarginManagers] = useState<Record<string, ManagerEntry>>({});
@@ -149,6 +150,35 @@ const TradeCardInner = dynamic(
               return () => { cancelled = true; };
             }, [account?.address, suiClient, collateral, balanceRefreshKey]);
 
+            // Reset manual-edit flag when inputs that determine collateral change
+            // NOTE: leverage is NOT included — changing leverage from collateral input
+            // should not reset the flag (would cause circular updates)
+            useEffect(() => {
+              setCollateralManuallyEdited(false);
+            }, [amount, selectedPool, collateral]);
+
+            // Auto-fill collateral to match selected leverage
+            // Amount = total position size, so: collateral = amount * basePrice / leverage / collateralPrice
+            useEffect(() => {
+              if (collateralManuallyEdited) return;
+              const amtNum = parseFloat(amount) || 0;
+              const lev = leverage[0];
+              if (amtNum <= 0 || basePrice <= 0 || lev <= 0) {
+                setCollateralAmount("");
+                return;
+              }
+              const collateralAssetPrice = getUsdPrice(collateral);
+              if (collateralAssetPrice <= 0) return;
+              const targetCollateral = (amtNum * basePrice) / (lev * collateralAssetPrice);
+              setCollateralAmount(
+                targetCollateral < 0.01
+                  ? targetCollateral.toPrecision(3)
+                  : targetCollateral < 1
+                    ? targetCollateral.toFixed(4)
+                    : targetCollateral.toFixed(2)
+              );
+            }, [amount, leverage, basePrice, collateral, getUsdPrice, collateralManuallyEdited]);
+
             // Base client (no managers) for creating new managers
             const baseClient = useMemo(() => {
               if (!account?.address || !suiClient) return null;
@@ -173,7 +203,7 @@ const TradeCardInner = dynamic(
               const collateralNum = parseFloat(collateralAmount) || 0;
               const leverageNum = leverage[0];
 
-              const orderQuantity = amountNum * leverageNum;
+              const orderQuantity = amountNum; // Amount = total position size
               const payWithDeep = collateral === "DEEP";
 
               // --- All calculations in USD ---
@@ -184,13 +214,16 @@ const TradeCardInner = dynamic(
 
               // Convert borrow USD back to the actual borrowed asset
               // Long → borrow quote, Short → borrow base
+              // Add 0.5% buffer for taker fees — bid orders need extra quote
+              // to cover the fee on top of the fill cost
+              const FEE_BUFFER = 1.005;
               let borrowAmount: number;
               if (borrowUsdRaw <= 0) {
                 borrowAmount = 0; // Fully collateralized, no borrow needed
               } else if (side === "long") {
-                borrowAmount = quotePrice > 0 ? borrowUsdRaw / quotePrice : 0;
+                borrowAmount = quotePrice > 0 ? (borrowUsdRaw / quotePrice) * FEE_BUFFER : 0;
               } else {
-                borrowAmount = basePrice > 0 ? borrowUsdRaw / basePrice : 0;
+                borrowAmount = basePrice > 0 ? (borrowUsdRaw / basePrice) * FEE_BUFFER : 0;
               }
 
               console.log("[TradeCard] Position calc (USD):", {
@@ -465,7 +498,6 @@ const TradeCardInner = dynamic(
 
             const amountNum = parseFloat(amount) || 0;
             const collateralNum = parseFloat(collateralAmount) || 0;
-            const leverageNum = leverage[0];
             const insufficientBalance = walletBalance !== null && collateralNum > 0 && collateralNum > walletBalance;
 
             const collateralOptions = useMemo(() => {
@@ -490,7 +522,7 @@ const TradeCardInner = dynamic(
 
             // --- All display calculations in USD ---
             const collateralPrice = getUsdPrice(collateral);
-            const displayExposureUsd = amountNum * basePrice * leverageNum;
+            const displayExposureUsd = amountNum * basePrice; // Amount = total position size
             const displayCollateralUsd = collateralNum * collateralPrice;
             const displayBorrowUsd = Math.max(0, displayExposureUsd - displayCollateralUsd);
 
@@ -519,7 +551,7 @@ const TradeCardInner = dynamic(
                 ? (displayCollateralUsd + displayBorrowUsd) / displayBorrowUsd
                 : Infinity;
 
-              const exposure = amountNum * leverageNum;
+              const exposure = amountNum; // Amount = total position size
               const exposureUsd = displayExposureUsd;
 
               const liqFactor = displayBorrowUsd > 0
@@ -534,7 +566,7 @@ const TradeCardInner = dynamic(
               const pnlDown = exposure * basePrice * 0.1;
 
               return { exposureUsd, liqPrice, exposure, riskRatio, pnlUp, pnlDown };
-            }, [isComplete, amountNum, displayExposureUsd, displayCollateralUsd, displayBorrowUsd, leverageNum, side, basePrice, liqRiskRatio]);
+            }, [isComplete, amountNum, displayExposureUsd, displayCollateralUsd, displayBorrowUsd, side, basePrice, liqRiskRatio]);
 
             return (
               <SpotlightCard className="w-full max-w-lg">
@@ -630,7 +662,10 @@ const TradeCardInner = dynamic(
                     </div>
                     <Slider
                       value={leverage}
-                      onValueChange={setLeverage}
+                      onValueChange={(val) => {
+                        setLeverage(val);
+                        setCollateralManuallyEdited(false); // Allow auto-fill from slider
+                      }}
                       min={1}
                       max={maxLeverage}
                       step={0.1}
@@ -650,11 +685,20 @@ const TradeCardInner = dynamic(
                         {walletBalance !== null && (
                           <button
                             type="button"
-                            onClick={() => setCollateralAmount(
-                              walletBalance < 0.01
-                                ? walletBalance.toPrecision(3)
-                                : walletBalance.toFixed(4)
-                            )}
+                            onClick={() => {
+                              setCollateralAmount(
+                                walletBalance < 0.01
+                                  ? walletBalance.toPrecision(3)
+                                  : walletBalance.toFixed(4)
+                              );
+                              setCollateralManuallyEdited(true);
+                              // Reverse: compute leverage from wallet balance
+                              if (walletBalance > 0 && amountNum > 0 && collateralPrice > 0 && basePrice > 0) {
+                                const newLev = (amountNum * basePrice) / (walletBalance * collateralPrice);
+                                const clamped = Math.min(maxLeverage, Math.max(1, Math.round(newLev * 10) / 10));
+                                setLeverage([clamped]);
+                              }
+                            }}
                             className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                           >
                             Bal: <span className="font-mono">{
@@ -677,7 +721,17 @@ const TradeCardInner = dynamic(
                         type="number"
                         placeholder={minCollateralAmount > 0 ? `Min ${minCollateralAmount < 0.01 ? minCollateralAmount.toPrecision(3) : minCollateralAmount.toFixed(2)}` : "0.00"}
                         value={collateralAmount}
-                        onChange={(e) => setCollateralAmount(e.target.value)}
+                        onChange={(e) => {
+                          setCollateralAmount(e.target.value);
+                          setCollateralManuallyEdited(true);
+                          // Reverse: compute leverage from collateral
+                          const colNum = parseFloat(e.target.value) || 0;
+                          if (colNum > 0 && amountNum > 0 && collateralPrice > 0 && basePrice > 0) {
+                            const newLev = (amountNum * basePrice) / (colNum * collateralPrice);
+                            const clamped = Math.min(maxLeverage, Math.max(1, Math.round(newLev * 10) / 10));
+                            setLeverage([clamped]);
+                          }
+                        }}
                         className="flex-1 h-9 px-3 bg-transparent text-sm outline-none placeholder:text-muted-foreground [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                       <Select value={collateral} onValueChange={setCollateral}>
@@ -701,11 +755,20 @@ const TradeCardInner = dynamic(
                         </span>
                         <button
                           type="button"
-                          onClick={() => setCollateralAmount(
-                            minCollateralAmount < 0.01
-                              ? minCollateralAmount.toPrecision(3)
-                              : minCollateralAmount.toFixed(2)
-                          )}
+                          onClick={() => {
+                            setCollateralAmount(
+                              minCollateralAmount < 0.01
+                                ? minCollateralAmount.toPrecision(3)
+                                : minCollateralAmount.toFixed(2)
+                            );
+                            setCollateralManuallyEdited(true);
+                            // Reverse: compute leverage from min collateral
+                            if (minCollateralAmount > 0 && amountNum > 0 && collateralPrice > 0 && basePrice > 0) {
+                              const newLev = (amountNum * basePrice) / (minCollateralAmount * collateralPrice);
+                              const clamped = Math.min(maxLeverage, Math.max(1, Math.round(newLev * 10) / 10));
+                              setLeverage([clamped]);
+                            }
+                          }}
                           className="font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                         >
                           {minCollateralAmount < 0.01 ? minCollateralAmount.toPrecision(3) : minCollateralAmount.toFixed(2)} {collateral}
