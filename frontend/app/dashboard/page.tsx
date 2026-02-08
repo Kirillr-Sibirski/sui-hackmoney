@@ -878,14 +878,6 @@ const ClosePopover = dynamic(
                     </p>
                   </div>
 
-                  {/* Stage progress */}
-                  {isSubmitting && txStage && (
-                    <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      <span>{txStage.label}</span>
-                    </div>
-                  )}
-
                   {/* Status message */}
                   {txStatus && !isSubmitting && (
                     <p
